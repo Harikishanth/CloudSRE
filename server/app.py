@@ -34,7 +34,7 @@ app = create_app(
     CloudSREAction,
     CloudSREObservation,
     env_name="cloud_sre_v2",
-    max_concurrent_envs=10,
+    max_concurrent_envs=1,
 )
 
 
