@@ -1,0 +1,31 @@
+spec_version: 1
+name: cloud_sre_v2
+version: 1.0.0
+description: "A cascading incident response environment where an AI agent debugs real microservices (payment, auth, worker, frontend) running as Python subprocesses. Features real HTTP calls, real SQLite database, real JWT auth, real message queues, and real cascading failures where fixing one service breaks another. 5 tasks across 5 difficulty tiers testing causal reasoning and multi-step SRE workflows."
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+tags:
+  - openenv
+  - cloud-sre
+  - cascading-failures
+  - causal-reasoning
+  - microservices
+  - enterprise-workflows
+tasks:
+  - id: warmup
+    description: "Single-service failure with clear signals. No red herrings, no cascades. Agent must identify root cause and apply fix."
+    grader: server.graders.grade_warmup
+  - id: single_fault
+    description: "Single-service failure with misleading signals from other services. Agent must distinguish root cause from red herrings."
+    grader: server.graders.grade_single_fault
+  - id: cascade
+    description: "Single-service failure that triggers a cascading failure after the primary fix. Agent must handle both the primary and the cascade."
+    grader: server.graders.grade_cascade
+  - id: multi_cascade
+    description: "Multi-service failure with 2+ cascading failures. Agent must resolve all cascades in the correct order."
+    grader: server.graders.grade_multi_cascade
+  - id: adversarial
+    description: "LLM-designed incident targeting agent weaknesses. Requires full SRE workflow: triage, investigate, mitigate, fix, verify."
+    grader: server.graders.grade_adversarial
