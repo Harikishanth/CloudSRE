@@ -221,7 +221,13 @@ def main():
             r=args.lora_r,
             lora_alpha=args.lora_r * 2,
             lora_dropout=0.05,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            # Daniel (Unsloth): "You MUST do LoRA on MLP too, not just attention"
+            # Reference: "LoRA Regret" blog post by Thinking Machines + Unsloth
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",  # attention
+                "gate_proj", "up_proj", "down_proj",      # MLP
+            ],
+            use_gradient_checkpointing="unsloth",  # async gradient offload to RAM
         )
         USE_UNSLOTH = True
         print("Unsloth loaded successfully!")
@@ -236,7 +242,11 @@ def main():
         )
         peft_config = LoraConfig(
             r=args.lora_r, lora_alpha=args.lora_r * 2,
-            lora_dropout=0.05, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            lora_dropout=0.05,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+            ],
         )
         model = get_peft_model(model, peft_config)
         USE_UNSLOTH = False
