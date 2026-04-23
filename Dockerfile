@@ -57,7 +57,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/env:$PYTHONPATH"
 
 # Create directories for service logs and data
-RUN mkdir -p /var/log/payment /var/log/auth /var/log/worker /var/log/frontend /data
+RUN mkdir -p /var/log/payment /var/log/auth /var/log/worker /var/log/frontend /var/log/cache /var/log/notification /data
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -364,7 +364,21 @@ class CloudSREEnvironment(Environment):
         all_healthy = self._check_all_resolved()
         cascade_just_fired = (cascade_result is not None)  # Cascade triggered THIS step
 
-        if all_healthy and cmd_type in ("fix", "health_check") and not cascade_just_fired:
+        # Guard 1: Agent must have executed at least one "fix" command
+        # (restart, drain, kill, config) before we consider resolution.
+        # This prevents episodes from resolving when the agent just runs
+        # diagnostic commands and happens to find everything healthy.
+        has_attempted_fix = any(
+            h.get("cmd_type") == "fix" for h in self._history
+        ) or cmd_type == "fix"
+
+        # Guard 2: Minimum 2 steps — prevents 1-step auto-resolve
+        min_steps_met = self._step_count >= 2
+
+        if (all_healthy and cmd_type in ("fix", "health_check")
+                and not cascade_just_fired
+                and has_attempted_fix
+                and min_steps_met):
             done = True
             # RLVE: Smooth partial rewards (§B.1 + Lewis: Wordle green/yellow)
             efficiency = 1.0 - (self._step_count / self._max_steps)
