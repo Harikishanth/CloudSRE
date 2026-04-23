@@ -181,11 +181,27 @@ def run_episode(
             f"  {n}: {h.get('status', '?')}" for n, h in health.items()
         )
 
+        # Detect broken services for targeted hints
+        broken = [n for n, h in health.items() if h.get('status') != 'healthy']
+
         history_text = ""
         if history:
             history_text = "PREVIOUS:\n" + "\n".join(
                 f"  $ {h['cmd']}" for h in history[-5:]
             ) + "\n\n"
+
+        # Turn-aware hints — guide untrained model toward fix commands
+        has_fix = any(
+            "restart" in h["cmd"] or "drain" in h["cmd"] or "fix:" in h["cmd"]
+            for h in history
+        )
+        urgency = ""
+        if turn >= 6 and not has_fix and broken:
+            urgency = f"\n⚠️ CRITICAL: Time almost up! Run exactly: restart_service {broken[0]}"
+        elif turn >= 3 and not has_fix and broken:
+            urgency = f"\n💡 You've diagnosed enough. Fix it now: restart_service {broken[0]}"
+        elif turn >= 1 and broken:
+            urgency = f"\n💡 Broken services detected: {', '.join(broken)}. After diagnosing, use: restart_service <service>"
 
         prompt = f"""{SYSTEM_PROMPT}
 
@@ -193,7 +209,7 @@ def run_episode(
 OUTPUT: {cmd_output}
 HEALTH:
 {health_text}
-{f'FEEDBACK: {feedback}' if feedback else ''}
+{f'FEEDBACK: {feedback}' if feedback else ''}{urgency}
 Step {turn+1}/{effective_max}. Next command:"""
 
         # Generate
