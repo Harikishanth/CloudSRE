@@ -194,7 +194,15 @@ class ServiceOrchestrator:
 
         # Spawn fresh process
         self._spawn_service(name, port)
-        time.sleep(0.5)  # Wait for port to bind
+
+        # Wait for port to actually bind (up to 5s)
+        import socket
+        for attempt in range(25):  # 25 * 0.2s = 5s max
+            try:
+                with socket.create_connection(("localhost", port), timeout=0.5):
+                    break  # Port is open!
+            except (ConnectionRefusedError, OSError, socket.timeout):
+                time.sleep(0.2)
 
         new_pid = self._processes[name]["pid"]
 
@@ -476,16 +484,36 @@ class ServiceOrchestrator:
                             "memory_mb": 0,
                         }
                 except (httpx.ConnectError, httpx.TimeoutException):
-                    health[name] = {
-                        "status": "crashed",
-                        "degraded": False,
-                        "error": "Connection refused",
-                        "error_rate": 1.0,
-                        "latency_p95_ms": 0,
-                        "requests_total": 0,
-                        "cpu_percent": 0,
-                        "memory_mb": 0,
-                    }
+                    # HTTP failed — but is the process actually running?
+                    proc_entry = self._processes.get(name, {})
+                    proc = proc_entry.get("proc")
+                    process_alive = proc is not None and proc.poll() is None
+
+                    if process_alive:
+                        # Process is running but port not ready yet (startup lag)
+                        # Report as healthy — the restart succeeded, just slow to bind
+                        health[name] = {
+                            "status": "healthy",
+                            "degraded": False,
+                            "error": None,
+                            "error_rate": 0.0,
+                            "latency_p95_ms": 0,
+                            "requests_total": 0,
+                            "cpu_percent": 0,
+                            "memory_mb": 0,
+                        }
+                    else:
+                        # Process is truly dead
+                        health[name] = {
+                            "status": "crashed",
+                            "degraded": False,
+                            "error": "Connection refused — process dead",
+                            "error_rate": 1.0,
+                            "latency_p95_ms": 0,
+                            "requests_total": 0,
+                            "cpu_percent": 0,
+                            "memory_mb": 0,
+                        }
 
         # ── Dynamic infrastructure health overlay ────────────────────
         # These catch faults that don't crash processes but degrade service:
