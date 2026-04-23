@@ -123,8 +123,9 @@ CRITICAL RULES:
 
 VALID_PREFIXES = (
     "curl ", "cat ", "tail ", "head ", "grep ", "sqlite3 ",
-    "kill ", "restart_service ", "ps ", "queue ", "drain ",
-    "config ", "status", "diagnose:", "fix:",
+    "kill ", "restart_service ", "systemctl ", "ps ", "queue ", "drain ",
+    "config ", "status", "services", "diagnose:", "fix:",
+    "ls ",  # ls /data/queue/ | wc -l
 )
 
 def parse_command(text: str) -> str:
@@ -193,14 +194,24 @@ OUTPUT: {cmd_output}
 HEALTH:
 {health_text}
 {f'FEEDBACK: {feedback}' if feedback else ''}
-Step {turn+1}/{max_turns}. Next command:"""
+Step {turn+1}/{effective_max}. Next command:"""
 
         # Generate
         response = generate_fn(prompt)
         command = parse_command(response)
 
-        # Step
-        result = env.step(command)
+        # Step — with retry for transient HF Space errors
+        try:
+            result = env.step(command)
+        except Exception as e:
+            # HF Space might be restarting or overloaded
+            import time as _time
+            _time.sleep(2)
+            try:
+                result = env.step(command)
+            except Exception:
+                # Abandon episode on persistent failure
+                break
         obs = result.get("observation", {})
         reward = float(result.get("reward", 0.0))
         rewards.append(reward)
@@ -340,12 +351,23 @@ def main():
             use_wandb = False
 
     for ep in range(1, args.episodes + 1):
-        result = run_episode(
-            env=env,
-            generate_fn=generate,
-            task_id=args.task_id,
-            max_turns=args.max_turns,
-        )
+        # Retry logic for transient HF Space errors (rebuild, overload)
+        for attempt in range(3):
+            try:
+                result = run_episode(
+                    env=env,
+                    generate_fn=generate,
+                    task_id=args.task_id,
+                    max_turns=args.max_turns,
+                )
+                break  # success
+            except Exception as e:
+                if attempt < 2:
+                    print(f"  ⚠️ Episode {ep} attempt {attempt+1} failed: {e}. Retrying in 10s...")
+                    time.sleep(10)
+                else:
+                    print(f"  ❌ Episode {ep} failed after 3 attempts. Skipping.")
+                    result = {"total_reward": -1.0, "steps": 0, "resolved": False, "history": []}
 
         total = result["total_reward"]
         all_rewards.append(total)
