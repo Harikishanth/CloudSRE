@@ -32,6 +32,8 @@ def _extract_services_mentioned(commands: List[str]) -> set:
         "auth": [":8002", "auth", "jwt", "token"],
         "worker": [":8003", "worker", "queue"],
         "frontend": [":8004", "frontend", "proxy"],
+        "cache": [":8005", "cache"],
+        "notification": [":8006", "notification", "webhook"],
     }
     for cmd in commands:
         cmd_lower = cmd.lower()
@@ -77,8 +79,10 @@ def _check_correct_service_targeted(
     service_indicators = {
         "payment": [":8001", "payment", "restart_service payment"],
         "auth": [":8002", "auth", "restart_service auth"],
-        "worker": [":8003", "worker", "restart_service worker"],
+        "worker": [":8003", "worker", "restart_service worker", "queue drain"],
         "frontend": [":8004", "frontend", "restart_service frontend"],
+        "cache": [":8005", "cache", "restart_service cache"],
+        "notification": [":8006", "notification", "restart_service notification", "webhook"],
     }
     indicators = service_indicators.get(target_service, [])
 

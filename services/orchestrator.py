@@ -299,8 +299,9 @@ class ServiceOrchestrator:
     def _inject_queue_overflow(self, target: str, params: dict) -> str:
         fill = params.get("fill", 900)
         self.queue.inject_overflow(fill_count=fill)
-        # Mark worker as DEGRADED — queue overflow causes worker to be overwhelmed
-        self._degraded_services["worker"] = f"Queue overflow ({fill} messages) — worker overwhelmed"
+        # NOTE: Do NOT mark worker as degraded here.
+        # check_health() dynamically checks queue.depth() > 500 instead.
+        # This ensures warmup (max_steps=10) can actually resolve.
         self._write_service_log("worker", "error",
             f"Queue depth critical: {self.queue.depth()}/{self.queue._max_size}")
         self._write_service_log("worker", "error",
@@ -485,6 +486,40 @@ class ServiceOrchestrator:
                         "cpu_percent": 0,
                         "memory_mb": 0,
                     }
+
+        # ── Dynamic infrastructure health overlay ────────────────────
+        # These catch faults that don't crash processes but degrade service:
+        #   - Queue overflow → worker overwhelmed (even if process is alive)
+        #   - DB lock → payment can't write (even if process is alive)
+        # This replaces the need for explicit _degraded_services on these.
+
+        if self.queue and self.queue.depth() > 500:
+            if "worker" in health and health["worker"]["status"] == "healthy":
+                depth = self.queue.depth()
+                health["worker"] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": f"Queue depth {depth}/{self.queue._max_size} — worker overwhelmed",
+                    "error_rate": 0.7,
+                    "latency_p95_ms": 3000,
+                    "requests_total": 0,
+                    "cpu_percent": 90,
+                    "memory_mb": 400,
+                }
+
+        if self.database and self.database._is_fault_locked:
+            if "payment" in health and health["payment"]["status"] == "healthy":
+                health["payment"] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": "Database locked — all writes failing",
+                    "error_rate": 0.9,
+                    "latency_p95_ms": 30000,
+                    "requests_total": 0,
+                    "cpu_percent": 10,
+                    "memory_mb": 200,
+                }
+
         return health
 
     # ── Utilities ────────────────────────────────────────────────────────

@@ -99,9 +99,9 @@ AVAILABLE COMMANDS:
   cat /var/log/<service>/error.log        — Read error logs (CRITICAL for diagnosis)
   sqlite3 /data/app.db '<SQL>'            — Query database state
   ps aux                                  — List running processes
-  restart_service <service>               — Restart a service (payment|auth|worker|frontend)
+  restart_service <service>               — Restart a service (payment|auth|worker|frontend|cache|notification)
   queue status                            — Check message queue depth
-  queue drain 10                          — Drain queue safely (NEVER drain all!)
+  queue drain 50                          — Drain queue safely (NEVER drain all!)
 
 SERVICES: payment(:8001) auth(:8002) worker(:8003) frontend(:8004) cache(:8005) notification(:8006)
 
@@ -114,7 +114,7 @@ SRE WORKFLOW (follow this order):
 
 CRITICAL RULES:
   - NEVER restart all services blindly — find the root cause first
-  - If queue depth > 100, use 'queue drain 10' NOT 'queue drain all'
+  - If queue depth > 100, use 'queue drain 50' NOT 'queue drain all'
   - Always verify fix with healthz after applying
   - Watch for CASCADE failures: fixing one service may break another"""
 
