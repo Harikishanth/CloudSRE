@@ -22,8 +22,13 @@ import os
 import re
 import sys
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
+
+# Suppress annoying HuggingFace / Transformers warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", module="transformers")
 
 # ── Check GPU availability ───────────────────────────────────────────────
 
@@ -282,7 +287,7 @@ def main():
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = model.generate(
-                **inputs, max_new_tokens=128, temperature=0.7,
+                **inputs, max_new_tokens=128, max_length=None, temperature=0.7,
                 do_sample=True, pad_token_id=tokenizer.pad_token_id,
             )
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
