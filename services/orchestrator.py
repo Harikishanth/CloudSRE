@@ -75,6 +75,7 @@ class ServiceOrchestrator:
         # Process tracking: {name: {"proc": Popen, "pid": int, "port": int}}
         self._processes: Dict[str, dict] = {}
         self._crashed_services: set = set()
+        self._degraded_services: Dict[str, str] = {}  # {name: reason} — services broken by cascade
         self._running = False
 
     def start(self):
@@ -196,6 +197,10 @@ class ServiceOrchestrator:
         time.sleep(0.5)  # Wait for port to bind
 
         new_pid = self._processes[name]["pid"]
+
+        # Clear degraded state — restart fixes degradation
+        self._degraded_services.pop(name, None)
+
         logger.info(f"  SERVICE RESTARTED: {name} PID={old_pid}→{new_pid} port={port}")
         return f"Service {name} restarted (PID {old_pid}→{new_pid}, port {port})"
 
@@ -213,6 +218,7 @@ class ServiceOrchestrator:
         for name in list(self._processes.keys()):
             self._stop_service(name)
         self._crashed_services.clear()
+        self._degraded_services.clear()
 
         # 2. Clear cascade state
         self._armed_cascade = None
@@ -293,8 +299,12 @@ class ServiceOrchestrator:
     def _inject_queue_overflow(self, target: str, params: dict) -> str:
         fill = params.get("fill", 900)
         self.queue.inject_overflow(fill_count=fill)
+        # Mark worker as DEGRADED — queue overflow causes worker to be overwhelmed
+        self._degraded_services["worker"] = f"Queue overflow ({fill} messages) — worker overwhelmed"
         self._write_service_log("worker", "error",
             f"Queue depth critical: {self.queue.depth()}/{self.queue._max_size}")
+        self._write_service_log("worker", "error",
+            "WorkerService: OOM risk — processing backlog consuming excessive memory")
         return f"Injected: queue overflow ({self.queue.depth()} messages)"
 
     def _inject_queue_pause(self, target: str, params: dict) -> str:
@@ -320,6 +330,8 @@ class ServiceOrchestrator:
 
     def _inject_cache_invalidation(self, target: str, params: dict) -> str:
         """Invalidate cache — triggers cold cache and potential thundering herd."""
+        # Mark cache as DEGRADED — cold cache = 100% miss rate = service degraded
+        self._degraded_services["cache"] = "Cache fully invalidated — 100% miss rate, thundering herd risk"
         self._write_service_log("cache", "error",
             "CacheService: FULL INVALIDATION — all entries evicted")
         self._write_service_log("cache", "error",
@@ -331,6 +343,8 @@ class ServiceOrchestrator:
     def _inject_webhook_storm(self, target: str, params: dict) -> str:
         """Trigger mass webhook retry — simulates Stripe-style retry storm."""
         count = params.get("count", 300)
+        # Mark notification as DEGRADED — webhook storm overwhelms delivery
+        self._degraded_services["notification"] = f"Webhook storm ({count} retries) — delivery pipeline overwhelmed"
         self._write_service_log("notification", "error",
             f"NotificationService: WEBHOOK STORM — {count} webhooks queued for retry")
         self._write_service_log("notification", "error",
@@ -362,9 +376,13 @@ class ServiceOrchestrator:
     # ── Cascade Injection ────────────────────────────────────────────────
 
     def inject_cascade(self, primary_fault: str, cascade_fault: str, params: dict = None):
-        """Inject a cascading failure — primary + armed secondary."""
+        """Arm a cascading failure — secondary fault triggers when primary is fixed.
+        
+        NOTE: The primary fault is already injected by _do_reset(). 
+        This method only ARMS the cascade trigger, it does NOT re-inject the primary.
+        """
         params = params or {}
-        self.inject_fault(primary_fault, params)
+        # Do NOT re-inject primary — it was already injected in _do_reset()
         self._armed_cascade = {
             "fault_type": cascade_fault,
             "params": params.get("cascade_params", {}),
@@ -428,6 +446,18 @@ class ServiceOrchestrator:
                     "requests_total": 0,
                     "cpu_percent": 0,
                     "memory_mb": 0,
+                }
+            elif name in self._degraded_services:
+                # Service is running but degraded (cascade effect)
+                health[name] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": self._degraded_services[name],
+                    "error_rate": 0.8,
+                    "latency_p95_ms": 5000,
+                    "requests_total": 0,
+                    "cpu_percent": 95,
+                    "memory_mb": 450,
                 }
             else:
                 try:

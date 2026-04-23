@@ -362,8 +362,9 @@ class CloudSREEnvironment(Environment):
         # ── Done Check ───────────────────────────────────────────────
         done = False
         all_healthy = self._check_all_resolved()
+        cascade_just_fired = (cascade_result is not None)  # Cascade triggered THIS step
 
-        if all_healthy and cmd_type in ("fix", "health_check"):
+        if all_healthy and cmd_type in ("fix", "health_check") and not cascade_just_fired:
             done = True
             # RLVE: Smooth partial rewards (§B.1 + Lewis: Wordle green/yellow)
             efficiency = 1.0 - (self._step_count / self._max_steps)

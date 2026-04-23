@@ -588,11 +588,18 @@ class CommandExecutor:
         elif "drain" in parts:
             if "all" in parts:
                 messages = queue.drain_all()
+                # drain-all is DANGEROUS — it overwhelms the worker (thundering herd)
+                if self.orchestrator and len(messages) > 50:
+                    self.orchestrator._degraded_services["worker"] = \
+                        f"Thundering herd — {len(messages)} messages processed at once, worker OOM"
                 return f"WARNING: Drained {len(messages)} messages at once (thundering herd risk!)"
             else:
                 rate_match = re.search(r'(\d+)', cmd)
                 rate = int(rate_match.group(1)) if rate_match else 10
                 messages = queue.drain_controlled(rate=rate)
+                # Controlled drain fixes the queue overflow — clear worker degradation
+                if self.orchestrator and queue.depth() < 100:
+                    self.orchestrator._degraded_services.pop("worker", None)
                 return f"Drained {len(messages)} messages at controlled rate={rate}"
         elif "pause" in parts:
             queue.inject_pause()
