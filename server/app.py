@@ -27,6 +27,8 @@ except ImportError:
     from cloud_sre_v2.models import CloudSREAction, CloudSREObservation
     from cloud_sre_v2.server.cloud_sre_environment import CloudSREEnvironment
 
+from fastapi.responses import HTMLResponse
+
 
 # Create the OpenEnv app
 app = create_app(
@@ -36,6 +38,164 @@ app = create_app(
     env_name="cloud_sre_v2",
     max_concurrent_envs=1,
 )
+
+
+# ── Landing Page (Root Endpoint) ──────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing_page():
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>CloudSRE v2 Environment</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --bg: #0f1115;
+                --surface: #1e2128;
+                --primary: #6366f1;
+                --text: #e2e8f0;
+                --muted: #94a3b8;
+                --success: #10b981;
+            }
+            body {
+                font-family: 'Inter', sans-serif;
+                background-color: var(--bg);
+                color: var(--text);
+                margin: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                padding: 2rem;
+            }
+            .container {
+                max-width: 800px;
+                width: 100%;
+                background: var(--surface);
+                padding: 3rem;
+                border-radius: 1rem;
+                box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+                border: 1px solid rgba(255,255,255,0.05);
+            }
+            h1 {
+                font-weight: 800;
+                font-size: 2.5rem;
+                margin-top: 0;
+                background: linear-gradient(to right, #818cf8, #c084fc);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            p {
+                color: var(--muted);
+                line-height: 1.6;
+                font-size: 1.1rem;
+            }
+            .status {
+                display: inline-flex;
+                align-items: center;
+                background: rgba(16, 185, 129, 0.1);
+                color: var(--success);
+                padding: 0.5rem 1rem;
+                border-radius: 2rem;
+                font-weight: 600;
+                font-size: 0.9rem;
+                margin-bottom: 1.5rem;
+            }
+            .status::before {
+                content: '';
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                background: var(--success);
+                border-radius: 50%;
+                margin-right: 8px;
+                box-shadow: 0 0 10px var(--success);
+            }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 1.5rem;
+                margin-top: 2rem;
+            }
+            .card {
+                background: rgba(255,255,255,0.02);
+                padding: 1.5rem;
+                border-radius: 0.75rem;
+                border: 1px solid rgba(255,255,255,0.05);
+            }
+            .card h3 {
+                margin: 0 0 0.5rem 0;
+                font-size: 1.1rem;
+                color: #fff;
+            }
+            .card p {
+                font-size: 0.9rem;
+                margin: 0;
+            }
+            .code-block {
+                background: #000;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                font-family: monospace;
+                color: #34d399;
+                margin-top: 2rem;
+                overflow-x: auto;
+            }
+            .links {
+                margin-top: 2rem;
+                display: flex;
+                gap: 1rem;
+            }
+            a {
+                color: var(--primary);
+                text-decoration: none;
+                font-weight: 600;
+            }
+            a:hover {
+                text-decoration: underline;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="status">System Online & Ready</div>
+            <h1>CloudSRE v2 Environment</h1>
+            <p>Welcome to the <b>CloudSRE v2</b> OpenEnv instance. This is a production-grade, 6-microservice environment with cascading failure patterns designed for training RL agents in Site Reliability Engineering.</p>
+            
+            <div class="grid">
+                <div class="card">
+                    <h3>6 Microservices</h3>
+                    <p>Payment, Auth, Worker, Frontend, Cache, and Notification.</p>
+                </div>
+                <div class="card">
+                    <h3>5 Difficulty Tiers</h3>
+                    <p>From warmups to full cascading outages.</p>
+                </div>
+                <div class="card">
+                    <h3>RLVE Aligned</h3>
+                    <p>Normalized rewards, auto-curriculums, and time limits.</p>
+                </div>
+            </div>
+
+            <div class="code-block">
+                # Ready for training. Use the OpenEnv client:
+                client = httpx.Client(base_url="https://dardrax-cloudsre-environment.hf.space")
+                client.post("/reset", json={"task_id": "warmup"})
+            </div>
+            
+            <div class="links">
+                <a href="/docs">→ View API Specs (Swagger UI)</a>
+                <a href="/tasks">→ View Task Tiers</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 
 # ── /tasks endpoint — required by OpenEnv Phase 2 validator ───────────────
