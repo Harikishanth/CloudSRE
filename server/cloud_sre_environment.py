@@ -248,7 +248,7 @@ class CloudSREEnvironment(Environment):
                 scenario.failure_type,
                 cascade.cascade_type,
                 {
-                    "target": cascade.affected_service,
+                    "target": scenario.target_service,  # PRIMARY service to watch
                     "cascade_params": {"target": cascade.affected_service},
                 },
             )

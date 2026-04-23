@@ -369,24 +369,39 @@ class ServiceOrchestrator:
             "fault_type": cascade_fault,
             "params": params.get("cascade_params", {}),
             "trigger": f"primary_{primary_fault}_fixed",
+            "primary_target": params.get("target", ""),  # track which service to watch
         }
         logger.info(f"Cascade armed: {primary_fault} → {cascade_fault}")
 
     def check_and_trigger_cascade(self) -> Optional[str]:
-        """Check if cascade should trigger (primary fault resolved)."""
+        """Check if cascade should trigger (primary fault resolved).
+        
+        Universal logic: if the primary target service is now healthy,
+        the agent fixed the primary fault → trigger the cascade.
+        """
         if not hasattr(self, "_armed_cascade") or not self._armed_cascade:
             return None
 
         cascade = self._armed_cascade
-        primary_resolved = False
-        trigger = cascade.get("trigger", "")
 
-        if "db_lock" in trigger and not self.database._is_fault_locked:
-            primary_resolved = True
-        elif "process_crash" in trigger:
-            target = cascade["params"].get("target", "payment")
-            if target not in self._crashed_services:
+        # Universal check: is the primary fault's target service healthy now?
+        primary_target = cascade.get("primary_target", "")
+        primary_resolved = False
+        
+        if primary_target:
+            health = self.check_health()
+            svc_health = health.get(primary_target, {})
+            if svc_health.get("status") == "healthy":
                 primary_resolved = True
+        else:
+            # Fallback to legacy checks for backwards compatibility
+            trigger = cascade.get("trigger", "")
+            if "db_lock" in trigger and not self.database._is_fault_locked:
+                primary_resolved = True
+            elif "process_crash" in trigger:
+                target = cascade["params"].get("target", "payment")
+                if target not in self._crashed_services:
+                    primary_resolved = True
 
         if primary_resolved:
             result = self.inject_fault(cascade["fault_type"], cascade["params"])
