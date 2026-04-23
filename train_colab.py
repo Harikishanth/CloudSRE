@@ -81,18 +81,36 @@ class SimpleCloudSREClient:
 
 # ── System Prompt ────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a production SRE on-call. Diagnose and fix broken services.
+SYSTEM_PROMPT = """You are a production SRE (Site Reliability Engineer) responding to a PagerDuty alert.
+You must diagnose and fix the incident before the SLA timer expires.
 
-Output ONE command per turn. No explanations, no markdown.
+Output EXACTLY ONE shell command per turn. No explanations, no markdown, no commentary.
 
-COMMANDS:
-  status                                  — overview of all services
-  curl http://localhost:<port>/healthz     — check service health
-  cat /var/log/<service>/error.log        — read error logs
-  restart_service <service>               — restart a service
-  queue drain 10                          — drain queue safely (NOT drain all!)
+AVAILABLE COMMANDS:
+  status                                  — Overview of all services (START HERE)
+  curl http://localhost:<port>/healthz     — Check specific service health
+  curl http://localhost:<port>/metrics     — View service metrics
+  cat /var/log/<service>/error.log        — Read error logs (CRITICAL for diagnosis)
+  sqlite3 /data/app.db '<SQL>'            — Query database state
+  ps aux                                  — List running processes
+  restart_service <service>               — Restart a service (payment|auth|worker|frontend)
+  queue status                            — Check message queue depth
+  queue drain 10                          — Drain queue safely (NEVER drain all!)
 
-WORKFLOW: status → healthz → logs → fix → verify"""
+SERVICES: payment(:8001) auth(:8002) worker(:8003) frontend(:8004) cache(:8005) notification(:8006)
+
+SRE WORKFLOW (follow this order):
+  1. TRIAGE:       Run 'status' to see which services are down
+  2. INVESTIGATE:  Check healthz, read logs, check metrics of affected services
+  3. DIAGNOSE:     Cross-reference logs + metrics to find root cause
+  4. FIX:          Apply the targeted fix (restart, drain, config change)
+  5. VERIFY:       Re-check health to confirm resolution
+
+CRITICAL RULES:
+  - NEVER restart all services blindly — find the root cause first
+  - If queue depth > 100, use 'queue drain 10' NOT 'queue drain all'
+  - Always verify fix with healthz after applying
+  - Watch for CASCADE failures: fixing one service may break another"""
 
 
 # ── Command parser ───────────────────────────────────────────────────────
@@ -197,8 +215,9 @@ def main():
     parser.add_argument("--task-id", default="warmup", help="Task tier")
     parser.add_argument("--episodes", type=int, default=20, help="Training episodes")
     parser.add_argument("--max-turns", type=int, default=10, help="Max turns per episode")
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-r", type=int, default=8, help="LoRA rank (8 for 0.5B-1.5B, 16 for 3B+)")
     parser.add_argument("--output-dir", default="cloudsre-agent", help="Output directory")
+    parser.add_argument("--wandb-project", default="", help="WandB project name (enables logging)")
     args = parser.parse_args()
 
     has_gpu = check_gpu()
@@ -279,6 +298,27 @@ def main():
     all_rewards = []
     best_reward = float("-inf")
 
+    # WandB integration for visual proof
+    use_wandb = bool(args.wandb_project)
+    if use_wandb:
+        try:
+            import wandb
+            wandb.init(
+                project=args.wandb_project,
+                config={
+                    "model": args.model_id,
+                    "task_id": args.task_id,
+                    "episodes": args.episodes,
+                    "lora_r": args.lora_r,
+                    "max_turns": args.max_turns,
+                },
+                name=f"cloudsre-{args.task_id}-{args.model_id.split('/')[-1]}",
+            )
+            print("WandB initialized!")
+        except Exception as e:
+            print(f"WandB init failed: {e}. Continuing without WandB.")
+            use_wandb = False
+
     for ep in range(1, args.episodes + 1):
         result = run_episode(
             env=env,
@@ -304,6 +344,18 @@ def main():
             f"best={best_reward:+.2f}"
         )
 
+        # WandB logging
+        if use_wandb:
+            import wandb
+            wandb.log({
+                "episode": ep,
+                "reward": total,
+                "steps": result["steps"],
+                "resolved": 1 if result["resolved"] else 0,
+                "avg_reward_10": avg_10,
+                "best_reward": best_reward,
+            })
+
     # ── Save ─────────────────────────────────────────────────────────────
     print(f"\nSaving model to {args.output_dir}...")
     model.save_pretrained(args.output_dir)
@@ -328,6 +380,10 @@ def main():
     print(f"\nModel saved to: {args.output_dir}/")
 
     env.close()
+
+    if use_wandb:
+        import wandb
+        wandb.finish()
 
 
 if __name__ == "__main__":

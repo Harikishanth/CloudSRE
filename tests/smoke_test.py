@@ -2,7 +2,11 @@
 import sys
 import os
 sys.path.insert(0, "D:/Meta")
+import shutil
+shutil.rmtree("D:/Meta/cloud_sre_v2/_test_data", ignore_errors=True)
+shutil.rmtree("D:/Meta/cloud_sre_v2/_test_log", ignore_errors=True)
 os.makedirs("D:/Meta/cloud_sre_v2/_test_data", exist_ok=True)
+os.makedirs("D:/Meta/cloud_sre_v2/_test_data/queue", exist_ok=True)
 os.makedirs("D:/Meta/cloud_sre_v2/_test_log", exist_ok=True)
 
 print("1. Testing orchestrator creation...")
@@ -13,6 +17,17 @@ orch = ServiceOrchestrator(
 )
 orch.start()
 print("   ✅ Orchestrator started")
+
+import time
+time.sleep(2)  # Extra wait for Windows port binding
+
+# Debug: check subprocess state
+for name, entry in orch._processes.items():
+    proc = entry["proc"]
+    rc = proc.poll()
+    if rc is not None:
+        stderr = proc.stderr.read().decode()[-500:]
+        print(f"   ⚠️  {name} CRASHED: {stderr}")
 
 print("\n2. Testing health check...")
 health = orch.check_health()

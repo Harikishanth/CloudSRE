@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.WARNING)
 
 def main():
     parser = argparse.ArgumentParser(description="Run a CloudSRE service as a standalone process")
-    parser.add_argument("--service", required=True, choices=["payment", "auth", "worker", "frontend"])
+    parser.add_argument("--service", required=True, choices=["payment", "auth", "worker", "frontend", "cache", "notification"])
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--db-path", required=True)
     parser.add_argument("--queue-dir", required=True)
@@ -58,6 +58,12 @@ def main():
     elif args.service == "frontend":
         from cloud_sre_v2.services.frontend_proxy import FrontendProxy
         svc = FrontendProxy(port=args.port, log_dir=args.log_dir)
+    elif args.service == "cache":
+        from cloud_sre_v2.services.cache_service import CacheService
+        svc = CacheService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "notification":
+        from cloud_sre_v2.services.notification_service import NotificationService
+        svc = NotificationService(port=args.port, log_dir=args.log_dir)
     else:
         print(f"Unknown service: {args.service}", file=sys.stderr)
         sys.exit(1)

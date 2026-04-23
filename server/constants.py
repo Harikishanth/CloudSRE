@@ -121,6 +121,47 @@ def _warmup_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
             ],
             task_id="warmup",
         ),
+        ScenarioSpec(
+            scenario_id="warmup_cache_cold",
+            failure_type="cache_invalidation",
+            target_service="cache",
+            difficulty=0.15,
+            alert_message=(
+                "🚨 INCIDENT — 11:20 UTC | Severity: P2\n"
+                "Cache hit ratio dropped from 94% to 0%.\n"
+                "All requests falling through to database.\n"
+                "User reports: 'Pages loading very slowly'"
+            ),
+            root_cause="Cache was invalidated — all entries expired simultaneously",
+            correct_fix_description="Warm the cache back up or restart cache service",
+            expected_diagnostic_path=[
+                "curl http://localhost:8005/healthz",
+                "curl http://localhost:8005/cache/stats",
+                "cat /var/log/cache/error.log",
+                "systemctl restart cache",
+            ],
+            task_id="warmup",
+        ),
+        ScenarioSpec(
+            scenario_id="warmup_notification_timeout",
+            failure_type="process_crash",
+            target_service="notification",
+            params={"target": "notification", "reason": "OOM"},
+            difficulty=0.15,
+            alert_message=(
+                "🚨 INCIDENT — 08:45 UTC | Severity: P2\n"
+                "Notification service not responding — webhooks not delivering.\n"
+                "User reports: 'Not receiving order confirmation emails'"
+            ),
+            root_cause="Notification service crashed (OOM) — needs restart",
+            correct_fix_description="Restart the notification service",
+            expected_diagnostic_path=[
+                "curl http://localhost:8006/healthz",
+                "ps aux | grep notification",
+                "systemctl restart notification",
+            ],
+            task_id="warmup",
+        ),
     ]
     return _adaptive_choice(scenarios, **kwargs)
 
@@ -424,6 +465,79 @@ def _cascade_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
             ],
             task_id="cascade",
         ),
+        ScenarioSpec(
+            scenario_id="cascade_db_cache_stampede",
+            failure_type="db_lock",
+            target_service="payment",
+            difficulty=0.60,
+            alert_message=(
+                "🚨 INCIDENT — 14:55 UTC | Severity: P0\n"
+                "Payment service returning 503 — database locked.\n"
+                "Cache hit ratio dropping rapidly (94% → 12%).\n"
+                "Cache entries expiring without refresh.\n"
+                "User reports: 'Checkout keeps timing out'"
+            ),
+            root_cause="DB lock blocks cache refresh → cache expires → thundering herd on DB recovery",
+            correct_fix_description=(
+                "1. Release DB lock (root cause)\n"
+                "2. IMPORTANT: Warm cache BEFORE traffic resumes\n"
+                "3. If cache stays cold, thundering herd will crash DB again"
+            ),
+            cascade_rules=[
+                CascadeRule(
+                    trigger_condition="DB lock released while cache is cold",
+                    cascade_type="cache_invalidation",
+                    affected_service="cache",
+                    description="All cached data expired during outage → 100% miss rate → DB thundering herd",
+                    agent_must="Warm cache after fixing DB, before full traffic resumes",
+                ),
+            ],
+            expected_diagnostic_path=[
+                "curl http://localhost:8001/healthz",
+                "curl http://localhost:8005/cache/stats",
+                "cat /var/log/payment/error.log",
+                "systemctl restart payment",
+                "curl http://localhost:8005/cache/warmup",
+            ],
+            task_id="cascade",
+        ),
+        ScenarioSpec(
+            scenario_id="cascade_payment_webhook_storm",
+            failure_type="process_crash",
+            target_service="payment",
+            params={"target": "payment", "reason": "SIGSEGV"},
+            difficulty=0.60,
+            alert_message=(
+                "🚨 INCIDENT — 20:30 UTC | Severity: P0\n"
+                "Payment service crashed — port 8001 closed.\n"
+                "Notification service queuing webhooks (can't deliver).\n"
+                "Webhook queue depth climbing: 250 and rising.\n"
+                "User reports: 'Payments failing, no confirmation emails'"
+            ),
+            root_cause="Payment crash → webhooks queue up → when payment recovers, webhook storm overwhelms it",
+            correct_fix_description=(
+                "1. Restart payment service\n"
+                "2. IMPORTANT: Drain webhook queue at controlled rate\n"
+                "3. If all webhooks fire at once, payment will crash again"
+            ),
+            cascade_rules=[
+                CascadeRule(
+                    trigger_condition="Payment restarted → queued webhooks fire simultaneously",
+                    cascade_type="webhook_storm",
+                    affected_service="notification",
+                    description="300 queued webhooks retry at once → payment overwhelmed → crashes again",
+                    agent_must="Drain webhook queue at controlled rate after payment restart",
+                ),
+            ],
+            expected_diagnostic_path=[
+                "curl http://localhost:8001/healthz",
+                "curl http://localhost:8006/webhooks/pending",
+                "ps aux | grep payment",
+                "systemctl restart payment",
+                "curl -X POST http://localhost:8006/webhooks/drain?count=10",
+            ],
+            task_id="cascade",
+        ),
     ]
     return _adaptive_choice(scenarios, **kwargs)
 
@@ -660,9 +774,9 @@ _FAULT_CATALOG = {
         "fix_tpl": "Resume queue consumer and check worker health",
     },
     "process_crash": {
-        "services": ["payment", "auth", "worker"],
+        "services": ["payment", "auth", "worker", "cache", "notification"],
         "gen_params": lambda: {
-            "target": random.choice(["payment", "auth", "worker"]),
+            "target": random.choice(["payment", "auth", "worker", "cache", "notification"]),
             "reason": random.choice([
                 "SIGSEGV", "SIGKILL", "OOM", "SIGABRT",
                 "unhandled exception", "stack overflow",
@@ -670,6 +784,18 @@ _FAULT_CATALOG = {
         },
         "root_cause_tpl": "Service process crashed ({reason}) — needs restart",
         "fix_tpl": "Restart the crashed service via systemctl restart",
+    },
+    "cache_invalidation": {
+        "services": ["cache"],
+        "gen_params": lambda: {},
+        "root_cause_tpl": "Cache invalidated — all entries expired, 0% hit ratio",
+        "fix_tpl": "Warm the cache or restart cache service",
+    },
+    "webhook_storm": {
+        "services": ["notification"],
+        "gen_params": lambda: {"count": random.randint(100, 400)},
+        "root_cause_tpl": "Webhook retry storm — {count} webhooks firing simultaneously",
+        "fix_tpl": "Drain webhook queue at controlled rate, pause delivery if needed",
     },
 }
 
@@ -679,6 +805,8 @@ _RED_HERRING_TEMPLATES = [
     {"service": "frontend", "message": "FrontendProxy: upstream pool near capacity ({used}/50)"},
     {"service": "worker", "message": "WorkerService: CPU spike to {cpu}% — batch backlog"},
     {"service": "payment", "message": "PaymentService: response time {latency}ms vs 20ms baseline"},
+    {"service": "cache", "message": "CacheService: hit ratio dropped to {ratio}% (normally 94%)"},
+    {"service": "notification", "message": "NotificationService: webhook delivery delayed {latency}ms"},
     {"service": "frontend", "message": "FrontendProxy: cache hit ratio dropped to {ratio}%"},
     {"service": "auth", "message": "AuthService: token refresh rate 3x normal ({rate}/min)"},
     {"service": "worker", "message": "WorkerService: GC pause elevated ({gc_ms}ms)"},
@@ -832,7 +960,7 @@ def _generate_dynamic_scenario(
     )
 
     scenario_id = f"dynamic_{fault_type}_{target}_{random.randint(1000, 9999)}"
-    port_map = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004}
+    port_map = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004, "cache": 8005, "notification": 8006}
 
     return ScenarioSpec(
         scenario_id=scenario_id,

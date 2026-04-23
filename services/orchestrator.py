@@ -38,6 +38,8 @@ SERVICE_PORTS = {
     "auth": 8002,
     "worker": 8003,
     "frontend": 8004,
+    "cache": 8005,
+    "notification": 8006,
 }
 
 
@@ -103,8 +105,8 @@ class ServiceOrchestrator:
         for name, port in SERVICE_PORTS.items():
             self._spawn_service(name, port)
 
-        # Wait for all services to bind their ports
-        time.sleep(1.0)
+        # Wait for all services to bind their ports (Windows needs longer)
+        time.sleep(2.0)
         self._running = True
         logger.info("CloudSRE orchestrator started — all services running as separate processes")
 
@@ -126,11 +128,17 @@ class ServiceOrchestrator:
             "--log-dir", self.log_dir,
         ]
 
+        # Compute the package root (parent of cloud_sre_v2/)
+        package_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        env = os.environ.copy()
+        env["PYTHONPATH"] = package_root + os.pathsep + env.get("PYTHONPATH", "")
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            # Don't inherit parent's stdin (avoids blocking)
+            cwd=package_root,
+            env=env,
         )
 
         self._processes[name] = {
@@ -219,7 +227,7 @@ class ServiceOrchestrator:
         # 5. Respawn all services as fresh processes
         for name, port in SERVICE_PORTS.items():
             self._spawn_service(name, port)
-        time.sleep(0.8)
+        time.sleep(2.0)  # Windows needs longer for port re-binding
 
         elapsed = (time.time() - start) * 1000
         logger.info(f"Environment reset in {elapsed:.0f}ms (all processes restarted)")
@@ -256,6 +264,8 @@ class ServiceOrchestrator:
             "queue_pause": self._inject_queue_pause,
             "process_crash": self._inject_process_crash,
             "misleading_signal": self._inject_misleading_signal,
+            "cache_invalidation": self._inject_cache_invalidation,
+            "webhook_storm": self._inject_webhook_storm,
         }
 
         fn = injectors.get(fault_type)
@@ -307,6 +317,27 @@ class ServiceOrchestrator:
         message = params.get("message", "Elevated latency detected (120ms vs 40ms baseline)")
         self._write_service_log(target, "error", f"[MISLEADING] {message}")
         return f"Injected: misleading signal in {target}"
+
+    def _inject_cache_invalidation(self, target: str, params: dict) -> str:
+        """Invalidate cache — triggers cold cache and potential thundering herd."""
+        self._write_service_log("cache", "error",
+            "CacheService: FULL INVALIDATION — all entries evicted")
+        self._write_service_log("cache", "error",
+            "CacheService: Hit ratio dropped to 0.0% — cache is COLD")
+        self._write_service_log("payment", "error",
+            "PaymentService: cache miss rate 100% — falling through to database")
+        return "Injected: cache invalidation (cold cache)"
+
+    def _inject_webhook_storm(self, target: str, params: dict) -> str:
+        """Trigger mass webhook retry — simulates Stripe-style retry storm."""
+        count = params.get("count", 300)
+        self._write_service_log("notification", "error",
+            f"NotificationService: WEBHOOK STORM — {count} webhooks queued for retry")
+        self._write_service_log("notification", "error",
+            f"NotificationService: Queue depth {count}/500 — delivery rate overwhelmed")
+        self._write_service_log("payment", "error",
+            "PaymentService: Inbound webhook callbacks spiking — 300 req/sec (normal: 10)")
+        return f"Injected: webhook storm ({count} retries)"
 
     # ── Log Writing ──────────────────────────────────────────────────────
 

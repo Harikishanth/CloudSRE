@@ -19,6 +19,7 @@ import json
 import os
 import logging
 import time
+import threading
 from uuid import uuid4
 from typing import Optional, Dict
 
@@ -53,6 +54,8 @@ class PerformanceTracker:
     scenarios still appear occasionally (curriculum doesn't forget them).
     """
 
+    TIER_ORDER = ["warmup", "single_fault", "cascade", "multi_cascade", "adversarial"]
+
     def __init__(self, window_size: int = 20):
         self._window_size = window_size
         # {scenario_id: [bool, bool, ...]}  True = resolved
@@ -84,12 +87,24 @@ class PerformanceTracker:
         weights = []
         for sid in scenario_ids:
             rate = self.success_rate(sid)
-            # Inverse performance: worse agent → higher weight
-            # +0.1 floor prevents zero-division and ensures mastered
-            # scenarios still appear occasionally
             w = 1.0 / (rate + 0.1)
             weights.append(w)
         return weights
+
+    def should_promote(self, current_tier: str, threshold: float = 0.7, min_attempts: int = 8) -> bool:
+        """RLVE §2.2 — Auto-curriculum promotion.
+
+        When agent achieves >= threshold success over >= min_attempts on current
+        tier, promote to next tier. Prevents learning stall.
+        """
+        tier_scenarios = [s for s in self._history if s.startswith(current_tier)]
+        if not tier_scenarios:
+            return False
+        total = sum(len(self._history[s]) for s in tier_scenarios)
+        if total < min_attempts:
+            return False
+        correct = sum(sum(self._history[s]) for s in tier_scenarios)
+        return (correct / total) >= threshold
 
     def get_stats(self) -> Dict[str, dict]:
         """Return performance stats for logging/debugging."""
@@ -110,9 +125,16 @@ class CloudSREEnvironment(Environment):
     Agent diagnoses and fixes real microservice incidents with cascading failures.
 
     Config via env vars:
-      TASK_TIER      - "warmup", "single_fault", "cascade", "multi_cascade", "adversarial"
+      TASK_TIER      - "warmup", "single_fault", "cascade", "multi_cascade", "adversarial", "auto"
       LLM_BACKEND    - "gemini" (default), "openai", "anthropic"
       MAX_STEPS      - Override max steps per episode
+
+    RLVE Alignment (arXiv:2511.07317):
+      - Rewards normalized to [-1.0, +1.0] (Appendix B)
+      - Smooth partial rewards (§B.1)
+      - Auto-curriculum promotion (§2.2)
+      - Rubric monitoring functions (zero-weight)
+      - Execute-with-time-limit guards
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = False
@@ -144,6 +166,9 @@ class CloudSREEnvironment(Environment):
         # Adaptive sampling — self-improving scenario selection (Theme #4)
         self._performance_tracker = PerformanceTracker(window_size=20)
 
+        # RLVE: Auto-curriculum — current auto-tier (only used when TASK_TIER=auto)
+        self._auto_tier = "warmup"
+
         logger.info("CloudSREEnvironment initialized successfully")
 
     def reset(self) -> CloudSREObservation:
@@ -172,9 +197,22 @@ class CloudSREEnvironment(Environment):
         self.orchestrator.reset()
         logger.info("Infrastructure reset complete (<100ms)")
 
-        # Step 2: Pick scenario for this episode (adaptive weighted sampling)
+        # Step 2: Pick scenario — with auto-curriculum promotion (RLVE §2.2)
         task_id = self._current_task_id
-        task_cfg = TASK_CONFIGS.get(task_id, TASK_CONFIGS["warmup"])
+
+        # RLVE auto-curriculum: promote tier when agent masters current one
+        if task_id == "auto":
+            if self._performance_tracker.should_promote(self._auto_tier):
+                idx = PerformanceTracker.TIER_ORDER.index(self._auto_tier)
+                if idx < len(PerformanceTracker.TIER_ORDER) - 1:
+                    old_tier = self._auto_tier
+                    self._auto_tier = PerformanceTracker.TIER_ORDER[idx + 1]
+                    logger.info(f"RLVE AUTO-PROMOTE: {old_tier} → {self._auto_tier}")
+            effective_tier = self._auto_tier
+            task_cfg = TASK_CONFIGS.get(effective_tier, TASK_CONFIGS["warmup"])
+        else:
+            task_cfg = TASK_CONFIGS.get(task_id, TASK_CONFIGS["warmup"])
+
         self._max_steps = int(os.environ.get("MAX_STEPS", str(task_cfg["max_steps"])))
 
         scenario = task_cfg["scenario_picker"](
@@ -249,7 +287,7 @@ class CloudSREEnvironment(Environment):
                 f"  sqlite3 /data/app.db '<SQL>'           — Query database\n"
                 f"  ps aux                                  — List processes\n"
                 f"  status                                  — Service overview\n\n"
-                f"Services: payment(:8001) auth(:8002) worker(:8003) frontend(:8004)\n"
+                f"Services: payment(:8001) auth(:8002) worker(:8003) frontend(:8004) cache(:8005) notification(:8006)\n"
             ),
             service_health=service_health,
             step_number=0,
@@ -282,8 +320,8 @@ class CloudSREEnvironment(Environment):
             feedback = "Command blocked — try something different."
             cmd_type = "unknown"
         else:
-            # ── Execute Real Command ──────────────────────────────────
-            output, cmd_type = self.orchestrator.executor.execute(cmd)
+            # ── Execute with Time Limit (Daniel/Unsloth workshop) ─────
+            output, cmd_type = self._execute_with_time_limit(cmd)
 
             # ── Phase Detection ───────────────────────────────────────
             self._current_phase = self._detect_phase(cmd_type)
@@ -295,6 +333,9 @@ class CloudSREEnvironment(Environment):
         if repeat_count == 1:
             reward -= 0.2
             feedback += " (repeated command — penalty)"
+
+        # RLVE: Clamp reward to [-1.0, +1.0] (Appendix B)
+        reward = self._clamp_reward(reward)
 
         logger.info(f"    → reward={reward:.2f} | phase={self._current_phase} | {feedback[:80]}")
 
@@ -316,21 +357,19 @@ class CloudSREEnvironment(Environment):
 
         if all_healthy and cmd_type in ("fix", "health_check"):
             done = True
-            # Resolution bonus (scaled by efficiency and difficulty)
-            difficulty = self._current_scenario.difficulty if self._current_scenario else 0.3
+            # RLVE: Smooth partial rewards (§B.1 + Lewis: Wordle green/yellow)
             efficiency = 1.0 - (self._step_count / self._max_steps)
-            bonus = 1.0 + difficulty * 2.0 + efficiency * 2.0
-            reward += bonus
-            feedback = f"🎉 Incident resolved! (efficiency bonus: +{bonus:.1f})"
+            reward = 0.5 + 0.5 * (efficiency ** 2)  # Range: [0.5, 1.0]
+            feedback = f"🎉 Incident resolved! (efficiency: {efficiency:.1%})"
 
             if self._cascade_triggered:
-                reward += 1.0  # Extra bonus for handling cascade
+                reward = min(1.0, reward + 0.2)  # Cascade bonus, capped at 1.0
                 feedback += " + cascade handled!"
 
-        if self._step_count >= self._max_steps:
+        elif self._step_count >= self._max_steps:
             done = True
-            raw_sum = sum(h.get("reward", 0) for h in self._history) + reward
-            reward -= raw_sum + 2.0  # Net total = -2.0
+            # RLVE: Timeout penalty, capped at -1.0
+            reward = -1.0
             feedback = "⏰ Timeout — incident remains unresolved."
 
         # ── Record History ───────────────────────────────────────────
@@ -358,7 +397,7 @@ class CloudSREEnvironment(Environment):
                 f"steps={self._step_count} | total_reward={total_reward:.2f} ==="
             )
 
-            # Save transcript
+            # Save transcript with rubric monitoring (RLVE)
             self._save_transcript(resolved)
             self._step_count = 0
 
@@ -410,65 +449,84 @@ class CloudSREEnvironment(Environment):
             return new_phase
         return self._current_phase
 
-    # ── Dense Reward Calculation ─────────────────────────────────────────
+    # ── RLVE: Reward Clamping (Appendix B) ────────────────────────────────
+
+    def _clamp_reward(self, reward: float) -> float:
+        """RLVE Appendix B: all environments use [-1.0, +1.0] range."""
+        return max(-1.0, min(1.0, reward))
+
+    # ── RLVE: Execute with Time Limit (Daniel/Unsloth workshop) ──────────
+
+    def _execute_with_time_limit(self, cmd: str, timeout: float = 10.0) -> tuple:
+        """Prevent infinite loops and reward hacking.
+
+        Daniel (Unsloth workshop): guard against commands that hang forever.
+        If a command takes >10s, kill it and return error + penalty.
+        """
+        result = [None, None]
+        def _run():
+            result[0], result[1] = self.orchestrator.executor.execute(cmd)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            return "ERROR: Command timed out after 10s. This may indicate a loop.", "unknown"
+        return result[0], result[1]
+
+    # ── Dense Reward Calculation (RLVE-aligned) ──────────────────────────
 
     def _calculate_reward(
         self, cmd: str, output: str, cmd_type: str, repeat_count: int
     ) -> tuple:
         """Calculate dense per-step reward.
 
-        Reward structure:
-          +0.2 for health check (triage)
-          +0.3 for relevant log/metric read (investigation)
-          +0.4 for database query (investigation)
-          +0.5 for correct fix (fix phase)
-          -0.1 for irrelevant command
-          -0.3 for error output
-          +0.1 phase progression bonus
+        RLVE-aligned: all per-step rewards are small fractions of [-1, +1].
+        Resolution/timeout rewards are handled separately in step().
         """
         reward = 0.0
         feedback_parts = []
 
-        # Base reward by command type
+        # Base reward by command type (RLVE-scaled)
         type_rewards = {
-            "health_check": 0.15,
-            "metrics": 0.20,
-            "logs": 0.20,
-            "database": 0.25,
-            "diagnosis": 0.10,
-            "fix": 0.30,
-            "unknown": -0.10,
+            "health_check": 0.05,
+            "metrics": 0.08,
+            "logs": 0.08,
+            "database": 0.10,
+            "diagnosis": 0.04,
+            "fix": 0.12,
+            "unknown": -0.05,
         }
         reward += type_rewards.get(cmd_type, 0.0)
 
         # Bonus for investigating the RIGHT service
         if self._current_scenario and self._current_scenario.target_service in cmd:
-            reward += 0.15
+            reward += 0.06
             feedback_parts.append("Investigating relevant service.")
 
         # Penalty for errors in output
         if "Error:" in output or "error:" in output or "refused" in output:
             if cmd_type == "health_check":
-                # Finding an error on health check is actually useful!
-                reward += 0.10
+                reward += 0.04
                 feedback_parts.append("Found service error — dig deeper.")
             elif cmd_type == "fix":
-                reward -= 0.20
+                reward -= 0.10
                 feedback_parts.append("Fix attempt failed.")
 
         # Phase progression bonus
         if self._current_phase != self._detect_phase(cmd_type):
-            reward += 0.10
+            reward += 0.04
             feedback_parts.append("Advancing to next SRE workflow phase.")
 
         # Cascade-aware rewards
         if self._cascade_triggered and self._cascade_alert:
             if cmd_type in ("health_check", "logs", "metrics"):
-                reward += 0.10
+                reward += 0.04
                 feedback_parts.append("Investigating cascade failure.")
 
         feedback = " ".join(feedback_parts) if feedback_parts else "Command executed."
-        return round(reward, 2), feedback
+        return round(reward, 3), feedback
 
     # ── Resolution Check ─────────────────────────────────────────────────
 
@@ -496,7 +554,26 @@ class CloudSREEnvironment(Environment):
 
         return all_healthy
 
-    # ── Transcript Saving ────────────────────────────────────────────────
+    # ── Transcript Saving + Rubric Monitoring (RLVE) ─────────────────────
+
+    def _compute_rubrics(self) -> dict:
+        """Zero-weight monitoring rewards — detect reward hacking.
+
+        David (Meta workshop): 'average rollout length reveals reward hacking early.'
+        Daniel (Unsloth workshop): 'use zero-weight rubric functions to monitor
+        without affecting gradients.'
+        """
+        cmds = [h["command"] for h in self._history]
+        phases = [h.get("phase", "unknown") for h in self._history]
+        return {
+            "rubric_avg_steps": len(self._history),
+            "rubric_unique_cmds": len(set(cmds)),
+            "rubric_repeat_rate": round(1 - (len(set(cmds)) / max(len(cmds), 1)), 3),
+            "rubric_phases_covered": len(set(phases)),
+            "rubric_target_investigated": any(
+                self._current_scenario.target_service in c for c in cmds
+            ) if self._current_scenario else False,
+        }
 
     def _save_transcript(self, resolved: bool):
         """Save episode transcript to JSONL and update adaptive sampling."""
@@ -508,6 +585,11 @@ class CloudSREEnvironment(Environment):
             stats = self._performance_tracker.get_stats()
             logger.info(f"  Adaptive sampling stats: {len(stats)} scenarios tracked")
 
+        # RLVE: Compute rubric metrics for hacking detection
+        rubrics = self._compute_rubrics()
+        if rubrics["rubric_avg_steps"] < 2 or rubrics["rubric_unique_cmds"] <= 1:
+            logger.warning(f"  ⚠️ POTENTIAL REWARD HACKING: {rubrics}")
+
         try:
             transcript = {
                 "episode": self._episode_count,
@@ -518,9 +600,11 @@ class CloudSREEnvironment(Environment):
                 "total_reward": sum(h.get("reward", 0) for h in self._history) / max(self._step_count, 1),
                 "difficulty": self._current_scenario.difficulty if self._current_scenario else 0.0,
                 "cascade_triggered": self._cascade_triggered,
+                "auto_tier": self._auto_tier if self._current_task_id == "auto" else None,
                 "alert": self._current_scenario.alert_message if self._current_scenario else "",
                 "root_cause": self._current_scenario.root_cause if self._current_scenario else "",
                 "history": self._history,
+                "rubrics": rubrics,
                 "adaptive_sampling": self._performance_tracker.get_stats(),
             }
             log_path = os.environ.get("EPISODE_LOG", "episode_transcripts.jsonl")
