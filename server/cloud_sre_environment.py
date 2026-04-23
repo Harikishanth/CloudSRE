@@ -540,12 +540,27 @@ class CloudSREEnvironment(Environment):
         """Check if all services are healthy.
 
         For cascade scenarios, both primary AND cascade must be resolved.
+        The cascade must actually TRIGGER before the episode can end.
         """
         health = self.orchestrator.check_health()
         all_healthy = all(
             svc["status"] == "healthy"
             for svc in health.values()
         )
+
+        # CRITICAL: If scenario has cascade rules but cascade hasn't triggered yet,
+        # the episode is NOT resolved — the agent fixed the primary fault but
+        # the cascade hasn't fired yet. We must wait for it.
+        has_cascade_rules = (
+            self._current_scenario
+            and hasattr(self._current_scenario, 'cascade_rules')
+            and self._current_scenario.cascade_rules
+        )
+
+        if has_cascade_rules and not self._cascade_triggered:
+            # Primary fault fixed but cascade hasn't triggered yet.
+            # Don't end the episode — the cascade should fire soon.
+            return False
 
         # If cascade was triggered, it must also be resolved
         if self._cascade_triggered:
