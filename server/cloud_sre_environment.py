@@ -171,12 +171,18 @@ class CloudSREEnvironment(Environment):
 
         logger.info("CloudSREEnvironment initialized successfully")
 
-    def reset(self) -> CloudSREObservation:
+    def reset(self, task_id: str = None, **kwargs) -> CloudSREObservation:
         """Reset environment for a new episode.
 
         Fast reset (<100ms) — no K8s pod stabilization needed.
+        
+        Args:
+            task_id: Override the task tier for this episode.
+                     If None, uses TASK_TIER env var (default: warmup).
         """
-        logger.info("reset() called")
+        if task_id is not None:
+            self._current_task_id = task_id
+        logger.info(f"reset() called with task_id={self._current_task_id}")
         try:
             return self._do_reset()
         except Exception as e:
