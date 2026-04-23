@@ -63,16 +63,17 @@ class SimpleCloudSREClient:
         resp = self.client.post("/reset", json={"task_id": task_id})
         resp.raise_for_status()
         data = resp.json()
-        self._session_id = data.get("session_id")
+        # OpenEnv ResetResponse: {observation: {...}, reward: float, done: bool}
         return data
 
     def step(self, command: str) -> dict:
         """Execute one command and get the result."""
+        # OpenEnv StepRequest expects: {"action": {"command": "..."}}
         resp = self.client.post("/step", json={
-            "command": command,
-            "session_id": self._session_id,
+            "action": {"command": command},
         })
         resp.raise_for_status()
+        # OpenEnv StepResponse: {observation: {...}, reward: float, done: bool}
         return resp.json()
 
     def close(self):
