@@ -47,6 +47,10 @@ class CommandExecutor:
     Ours: Multiple command types across 7 layers.
     """
 
+    # All known service names — used for command routing when self.services is empty
+    # (subprocess mode where services run as separate OS processes)
+    KNOWN_SERVICES = {"payment", "auth", "worker", "frontend", "cache", "notification"}
+
     def __init__(self, services: Dict[str, Any], infra: Dict[str, Any], orchestrator=None):
         """
         Args:
@@ -59,6 +63,7 @@ class CommandExecutor:
         self.orchestrator = orchestrator  # For real service restart
         self._command_count = 0
         self._error_count = 0
+        self._command_type_counts = {}  # Track command types for diminishing returns
 
     def execute(self, command: str) -> Tuple[str, str]:
         """Execute a command and return (output, command_type).
@@ -470,6 +475,23 @@ class CommandExecutor:
         except PermissionError:
             return f"ls: cannot open directory '{path}': Permission denied"
 
+    def _match_service_name(self, cmd: str) -> Optional[str]:
+        """Extract service name from a command string.
+        
+        Works in both in-process mode (self.services populated) and
+        subprocess mode (self.services empty, use KNOWN_SERVICES).
+        """
+        cmd_lower = cmd.lower()
+        # First try self.services (in-process mode)
+        for name in self.services:
+            if name in cmd_lower:
+                return name
+        # Fallback to known service names (subprocess mode)
+        for name in self.KNOWN_SERVICES:
+            if name in cmd_lower:
+                return name
+        return None
+
     def _handle_kill(self, cmd: str) -> str:
         """Kill a service — ACTUALLY stops the uvicorn server.
 
@@ -481,45 +503,32 @@ class CommandExecutor:
         This REALLY stops the server. The port stops listening.
         curl will get 'Connection refused' after this.
         """
-        # Extract service name
-        service_name = None
-        for name in self.services:
-            if name in cmd.lower():
-                service_name = name
-                break
+        service_name = self._match_service_name(cmd)
 
         if not service_name:
-            # Try to match by PID (maps to main process)
             pid_match = re.search(r'(?:kill|stop)\s+(?:-\d+\s+)?(\d+)', cmd)
             if pid_match:
-                # All services share the main PID, so try to identify from context
                 return "Error: ambiguous PID — use service name (e.g., kill payment)"
-
-        if not service_name:
             return "Error: could not identify target service/process"
 
-        svc = self.services.get(service_name)
-        if not svc:
-            return f"Error: service '{service_name}' not found"
-
-        svc.logger.error(f"Process killed: {cmd}")
-
-        # ACTUALLY stop the uvicorn server via orchestrator
+        # ACTUALLY stop the uvicorn server via orchestrator (subprocess mode)
         if self.orchestrator and hasattr(self.orchestrator, '_stop_service'):
             self.orchestrator._stop_service(service_name)
-            svc.set_unhealthy(f"Process killed by agent")
             return f"Killed {service_name} service — port no longer listening"
 
-        # Fallback
-        svc.set_unhealthy(f"Process killed by agent")
-        return f"Killed {service_name} service"
+        # Fallback: in-process mode
+        svc = self.services.get(service_name)
+        if svc:
+            svc.set_unhealthy(f"Process killed by agent")
+            return f"Killed {service_name} service"
+        return f"Error: service '{service_name}' not found"
 
     def _handle_restart(self, cmd: str) -> str:
         """Restart a service — ACTUALLY stops and restarts the uvicorn server.
 
         Supports:
             restart_service payment
-            python /app/services/payment_service.py &
+            systemctl restart payment
 
         This is a REAL restart:
           1. The uvicorn server is stopped (port closes)
@@ -527,11 +536,7 @@ class CommandExecutor:
           3. A new uvicorn server starts (port opens again)
           4. If the service used the DB, the DB lock is released
         """
-        service_name = None
-        for name in self.services:
-            if name in cmd.lower():
-                service_name = name
-                break
+        service_name = self._match_service_name(cmd)
 
         if not service_name:
             return "Error: could not identify target service"
@@ -664,7 +669,7 @@ class CommandExecutor:
         """
         import httpx
 
-        port_map = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004}
+        port_map = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004, "cache": 8005, "notification": 8006}
         lines = []
 
         for name, port in port_map.items():

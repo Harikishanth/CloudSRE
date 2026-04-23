@@ -170,13 +170,13 @@ class CloudSREState(State):
     # ── Curriculum ──
     judge_persona: str = "junior"  # junior / senior / principal
     tier: int = 1  # 1-5
-    curriculum_stats: dict = {}
+    curriculum_stats: dict = field(default_factory=dict)
 
     # ── Phase Tracking ──
     current_phase: str = "triage"
-    phases_visited: list = []
-    investigated_services: list = []
-    fixes_attempted: list = []
+    phases_visited: list = field(default_factory=list)
+    investigated_services: list = field(default_factory=list)
+    fixes_attempted: list = field(default_factory=list)
 
 
 # ── Scenario Data Models ────────────────────────────────────────────────────

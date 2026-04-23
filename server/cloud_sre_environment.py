@@ -261,6 +261,8 @@ class CloudSREEnvironment(Environment):
         self._current_phase = "triage"
         self._episode_id = str(uuid4())
         self._episode_count += 1
+        self._cmd_type_counts = {}  # Reset diminishing returns
+        self._phases_awarded = set()  # Reset phase progression tracking
 
         self._state = CloudSREState(
             episode_id=self._episode_id,
@@ -490,11 +492,23 @@ class CloudSREEnvironment(Environment):
 
         RLVE-aligned: all per-step rewards are small fractions of [-1, +1].
         Resolution/timeout rewards are handled separately in step().
+
+        Anti-gaming measures:
+          - Diminishing returns on command TYPES (not just exact strings)
+          - Service name bonus requires prior diagnostic work
+          - Phase progression bonus only on first transition
         """
         reward = 0.0
         feedback_parts = []
 
+        # Track command type counts for diminishing returns
+        if not hasattr(self, '_cmd_type_counts'):
+            self._cmd_type_counts = {}
+        type_count = self._cmd_type_counts.get(cmd_type, 0)
+        self._cmd_type_counts[cmd_type] = type_count + 1
+
         # Base reward by command type (RLVE-scaled)
+        # Diminishing returns: reward * (1 / (1 + type_count))
         type_rewards = {
             "health_check": 0.05,
             "metrics": 0.08,
@@ -504,10 +518,18 @@ class CloudSREEnvironment(Environment):
             "fix": 0.12,
             "unknown": -0.05,
         }
-        reward += type_rewards.get(cmd_type, 0.0)
+        base = type_rewards.get(cmd_type, 0.0)
+        diminishing = 1.0 / (1.0 + type_count)  # 1st=1.0, 2nd=0.5, 3rd=0.33...
+        reward += base * diminishing
 
-        # Bonus for investigating the RIGHT service
-        if self._current_scenario and self._current_scenario.target_service in cmd:
+        # Bonus for investigating the RIGHT service — ONLY after at least
+        # 1 diagnostic command (prevents free bonus on first fix command)
+        has_done_diagnostics = any(
+            h.get("cmd_type") in ("health_check", "logs", "database", "metrics")
+            for h in self._history
+        )
+        if (self._current_scenario and self._current_scenario.target_service in cmd
+                and has_done_diagnostics and cmd_type != "diagnosis"):
             reward += 0.06
             feedback_parts.append("Investigating relevant service.")
 
@@ -520,10 +542,14 @@ class CloudSREEnvironment(Environment):
                 reward -= 0.10
                 feedback_parts.append("Fix attempt failed.")
 
-        # Phase progression bonus
-        if self._current_phase != self._detect_phase(cmd_type):
+        # Phase progression bonus — only on FIRST transition to each phase
+        if not hasattr(self, '_phases_awarded'):
+            self._phases_awarded = set()
+        new_phase = self._detect_phase(cmd_type)
+        if new_phase != self._current_phase and new_phase not in self._phases_awarded:
             reward += 0.04
             feedback_parts.append("Advancing to next SRE workflow phase.")
+            self._phases_awarded.add(new_phase)
 
         # Cascade-aware rewards
         if self._cascade_triggered and self._cascade_alert:
