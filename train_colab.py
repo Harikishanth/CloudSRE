@@ -221,12 +221,17 @@ Step {turn+1}/{effective_max}. Next command:"""
 
     if resolved:
         # Resolved: sum of all rewards (includes resolution bonus from env)
+        # Typical range: +0.8 to +2.5 depending on efficiency
         total = sum(rewards)
     else:
-        # FAILED: heavy penalty that overwhelms per-step bonuses
-        # Per-step rewards shouldn't make failure look positive
+        # FAILED: shift sum down so it's reliably negative, but PRESERVE VARIANCE
+        # Old bug: min(sum, -0.5) gave flat -0.50 → zero GRPO gradient
+        # New: subtract penalty proportional to steps used
+        # - Episode with useful diagnostics (sum ~1.0): total = 1.0 - 2.0 = -1.0
+        # - Episode with garbage commands (sum ~0.2): total = 0.2 - 2.0 = -1.8
+        # This gives GRPO contrast between "tried well but failed" vs "total garbage"
         per_step_sum = sum(rewards)
-        total = min(per_step_sum, -0.5)  # Cap at -0.5 to ensure negative signal
+        total = per_step_sum - 2.0  # shift down to ensure negative
 
     return {
         "total_reward": round(total, 3),
