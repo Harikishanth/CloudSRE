@@ -142,7 +142,7 @@ def run_episode(
     env: SimpleCloudSREClient,
     generate_fn,  # callable(prompt) -> str
     task_id: str = "warmup",
-    max_turns: int = 10,
+    max_turns: int = 30,  # upper bound; actual limit comes from environment
 ) -> dict:
     """Run one full SRE episode.
 
@@ -161,7 +161,11 @@ def run_episode(
     history = []
     rewards = []
 
-    for turn in range(max_turns):
+    # Read max_steps from environment (warmup=10, cascade=20, multi=25, adversarial=30)
+    env_max_steps = obs.get("max_steps", max_turns)
+    effective_max = min(max_turns, env_max_steps)  # respect both limits
+
+    for turn in range(effective_max):
         done = result.get("done", False)
         if done:
             break
@@ -202,11 +206,21 @@ Step {turn+1}/{max_turns}. Next command:"""
         rewards.append(reward)
         history.append({"cmd": command, "reward": reward})
 
-    total = sum(rewards) if rewards else -1.0
+    resolved = result.get("done", False) and any(r > 0.3 for r in rewards[-1:])
+
+    if resolved:
+        # Resolved: sum of all rewards (includes resolution bonus from env)
+        total = sum(rewards)
+    else:
+        # FAILED: heavy penalty that overwhelms per-step bonuses
+        # Per-step rewards shouldn't make failure look positive
+        per_step_sum = sum(rewards)
+        total = min(per_step_sum, -0.5)  # Cap at -0.5 to ensure negative signal
+
     return {
-        "total_reward": total,
+        "total_reward": round(total, 3),
         "steps": len(history),
-        "resolved": result.get("done", False) and total > 0,
+        "resolved": resolved,
         "history": history,
     }
 
@@ -220,7 +234,7 @@ def main():
     parser.add_argument("--model-id", default="unsloth/Qwen3-0.6B", help="Model to train")
     parser.add_argument("--task-id", default="warmup", help="Task tier")
     parser.add_argument("--episodes", type=int, default=20, help="Training episodes")
-    parser.add_argument("--max-turns", type=int, default=10, help="Max turns per episode")
+    parser.add_argument("--max-turns", type=int, default=30, help="Max turns per episode (env may set lower)")
     parser.add_argument("--lora-r", type=int, default=8, help="LoRA rank (8 for 0.5B-1.5B, 16 for 3B+)")
     parser.add_argument("--output-dir", default="cloudsre-agent", help="Output directory")
     parser.add_argument("--wandb-project", default="", help="WandB project name (enables logging)")
