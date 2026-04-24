@@ -76,6 +76,7 @@ class ServiceOrchestrator:
         self._processes: Dict[str, dict] = {}
         self._crashed_services: set = set()
         self._degraded_services: Dict[str, str] = {}  # {name: reason} — services broken by cascade
+        self._latency_injected: Dict[str, int] = {}  # {name: latency_ms} — simulated network latency
         self._running = False
 
     def start(self):
@@ -206,8 +207,9 @@ class ServiceOrchestrator:
 
         new_pid = self._processes[name]["pid"]
 
-        # Clear degraded state — restart fixes degradation
+        # Clear degraded state and latency — restart fixes both
         self._degraded_services.pop(name, None)
+        self._latency_injected.pop(name, None)
 
         logger.info(f"  SERVICE RESTARTED: {name} PID={old_pid}→{new_pid} port={port}")
         return f"Service {name} restarted (PID {old_pid}→{new_pid}, port {port})"
@@ -227,6 +229,7 @@ class ServiceOrchestrator:
             self._stop_service(name)
         self._crashed_services.clear()
         self._degraded_services.clear()
+        self._latency_injected.clear()
 
         # 2. Clear cascade state
         self._armed_cascade = None
@@ -280,6 +283,7 @@ class ServiceOrchestrator:
             "misleading_signal": self._inject_misleading_signal,
             "cache_invalidation": self._inject_cache_invalidation,
             "webhook_storm": self._inject_webhook_storm,
+            "latency_injection": self._inject_latency,
         }
 
         fn = injectors.get(fault_type)
@@ -336,6 +340,20 @@ class ServiceOrchestrator:
         message = params.get("message", "Elevated latency detected (120ms vs 40ms baseline)")
         self._write_service_log(target, "error", f"[MISLEADING] {message}")
         return f"Injected: misleading signal in {target}"
+
+    def _inject_latency(self, target: str, params: dict) -> str:
+        """Inject network latency into a service — simulates degraded network."""
+        latency_ms = params.get("latency_ms", 3000)
+        self._latency_injected[target] = latency_ms
+        self._degraded_services[target] = (
+            f"Network latency spike — p95 latency {latency_ms}ms (baseline: 40ms)"
+        )
+        self._write_service_log(target, "error",
+            f"NetworkMonitor: latency spike detected — "
+            f"p95={latency_ms}ms, p99={latency_ms*2}ms, baseline=40ms")
+        self._write_service_log(target, "error",
+            f"Upstream connections timing out after {latency_ms}ms")
+        return f"Injected: {latency_ms}ms latency into {target}"
 
     def _inject_cache_invalidation(self, target: str, params: dict) -> str:
         """Invalidate cache — triggers cold cache and potential thundering herd."""
@@ -574,6 +592,19 @@ class ServiceOrchestrator:
                     "requests_total": 0,
                     "cpu_percent": 5,
                     "memory_mb": 100,
+                }
+        # Network latency injection → service degraded with measurable latency
+        for svc_name, latency_ms in self._latency_injected.items():
+            if svc_name in health and health[svc_name]["status"] == "healthy":
+                health[svc_name] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": f"Network latency spike — p95={latency_ms}ms (baseline: 40ms)",
+                    "error_rate": 0.3,
+                    "latency_p95_ms": latency_ms,
+                    "requests_total": 0,
+                    "cpu_percent": 30,
+                    "memory_mb": 200,
                 }
 
         return health

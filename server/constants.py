@@ -797,6 +797,15 @@ _FAULT_CATALOG = {
         "root_cause_tpl": "Webhook retry storm — {count} webhooks firing simultaneously",
         "fix_tpl": "Drain webhook queue at controlled rate, pause delivery if needed",
     },
+    "latency_injection": {
+        "services": ["payment", "auth", "worker", "cache", "notification"],
+        "gen_params": lambda: {
+            "target": random.choice(["payment", "auth", "worker", "cache", "notification"]),
+            "latency_ms": random.choice([2000, 3000, 5000, 8000, 15000]),
+        },
+        "root_cause_tpl": "Network latency spike — p95 latency {latency_ms}ms (baseline: 40ms)",
+        "fix_tpl": "Restart service to clear network degradation, check upstream dependencies",
+    },
 }
 
 # Red herring generators — 10 templates for diverse misdirection

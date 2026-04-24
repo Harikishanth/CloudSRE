@@ -383,9 +383,21 @@ class CloudSREEnvironment(Environment):
                 and has_attempted_fix
                 and min_steps_met):
             done = True
-            # RLVE: Smooth partial rewards (§B.1 + Lewis: Wordle green/yellow)
+
+            # ── Reward Normalization (RLVE §B.1) ──
+            # Efficiency is relative to each tier's max_steps, ensuring fair
+            # comparison across tiers (warmup=10, cascade=20, adversarial=30).
+            # Tier difficulty multiplier incentivizes progression to harder tiers.
             efficiency = 1.0 - (self._step_count / self._max_steps)
-            reward = 0.5 + 0.5 * (efficiency ** 2)  # Range: [0.5, 1.0]
+            base_reward = 0.5 + 0.5 * (efficiency ** 2)  # Range: [0.5, 1.0]
+
+            # Tier difficulty multiplier — harder tiers get bonus
+            tier_bonus = {
+                "warmup": 0.0, "single_fault": 0.05,
+                "cascade": 0.10, "multi_cascade": 0.15, "adversarial": 0.20,
+            }.get(self._current_task_id, 0.0)
+            reward = min(1.0, base_reward + tier_bonus)
+
             feedback = f"🎉 Incident resolved! (efficiency: {efficiency:.1%})"
 
             if self._cascade_triggered:

@@ -1,4 +1,7 @@
-"""Generate 50+ SFT expert demonstrations across all tiers."""
+"""
+Generate 100+ BALANCED SFT demonstrations across all 5 tiers.
+Target: 20 per tier for even distribution.
+"""
 import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 import httpx, json, time
@@ -23,8 +26,13 @@ SERVICES: payment(8001), auth(8002), worker(8003), frontend(8004), cache(8005), 
 SRE WORKFLOW: triage (status) -> investigate (logs) -> fix (restart/drain) -> verify (status)
 Output ONLY the next command. No explanations."""
 
+
+def find_broken(health):
+    return [(s, h.get("status",""), h.get("error","")) for s, h in health.items() if h.get("status") != "healthy"]
+
+
 def run_expert_episode(tier):
-    """Run one expert episode and return the chat messages if resolved."""
+    """Run a full expert episode with flexible multi-step strategy."""
     r = client.post("/reset", json={"task_id": tier})
     data = r.json()
     obs = data.get("observation", data)
@@ -33,120 +41,138 @@ def run_expert_episode(tier):
     alert = obs.get("alert", "")
     max_steps = obs.get("max_steps", 10)
     scenario_id = obs.get("scenario_id", "")
+    broken = find_broken(health)
     
-    broken = [(s, h.get("status"), h.get("error", "")) for s, h in health.items() if h.get("status") != "healthy"]
     if not broken:
         return None, scenario_id
     
-    target_svc = broken[0][0]
-    target_port = PORT_MAP.get(target_svc, 8001)
-    error_text = broken[0][2].lower()
-    
-    # Build expert strategy based on fault
-    commands = []
-    # Step 1: Always triage
-    commands.append("status")
-    # Step 2: Investigate 
-    commands.append(f"cat /var/log/{target_svc}/error.log")
-    # Step 3-N: Fix
-    if "queue" in error_text:
-        commands.extend(["queue drain 200", "queue drain 200", "queue drain 200"])
-    else:
-        commands.append(f"restart_service {target_svc}")
-    # Final: Verify
-    commands.append("status")
-    
+    # Build conversation
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    health_text = "\n".join(f"  {s}: {h.get('status','')} {'| '+str(h.get('error',''))[:80] if h.get('error') else ''}" for s, h in health.items())
+    health_text = "\n".join(
+        f"  {s}: {h.get('status','')} {'| '+str(h.get('error',''))[:80] if h.get('error') else ''}"
+        for s, h in health.items()
+    )
     messages.append({"role": "user", "content": f"ALERT: {alert}\n\nHEALTH:\n{health_text}\n\nStep 1/{max_steps}. Next command:"})
     
     resolved = False
     final_step = 0
+    d = data  # For tracking state
     
-    for i, cmd in enumerate(commands):
+    # Step 1: Always start with status (triage)
+    messages.append({"role": "assistant", "content": "status"})
+    r2 = client.post("/step", json={"action": {"command": "status"}})
+    d = r2.json()
+    final_step = 1
+    
+    if d.get("done", d.get("observation", d).get("done", False)):
+        return {"messages": messages, "scenario_id": scenario_id, "tier": tier, "steps": final_step}, scenario_id
+    
+    # Iteratively fix all broken services
+    for step in range(max_steps - 1):
+        obs = d.get("observation", d)
+        health = obs.get("service_health", {})
+        cmd_output = obs.get("command_output", "")[:300]
+        feedback = obs.get("feedback", "")
+        broken = find_broken(health)
+        cascade = obs.get("cascade_triggered", False)
+        
+        if not broken:
+            # All healthy - verify
+            sh_text = "\n".join(f"  {s}: {h.get('status','')}" for s, h in health.items())
+            messages.append({"role": "user", "content": f"OUTPUT: {cmd_output[:200]}\n{feedback}\nHEALTH:\n{sh_text}\n\nStep {final_step+1}/{max_steps}. Next command:"})
+            messages.append({"role": "assistant", "content": "status"})
+            r3 = client.post("/step", json={"action": {"command": "status"}})
+            d = r3.json()
+            final_step += 1
+            if d.get("done", d.get("observation", d).get("done", False)):
+                resolved = True
+                break
+            continue
+        
+        svc, status, error = broken[0]
+        error_lower = error.lower()
+        
+        # Choose fix
+        if "queue" in error_lower and ("overflow" in error_lower or "depth" in error_lower or "overwhelmed" in error_lower or "paused" in error_lower):
+            cmd = "queue drain 200"
+        else:
+            cmd = f"restart_service {svc}"
+        
+        # Add observation + action
+        sh_text = "\n".join(
+            f"  {s}: {h.get('status','')} {'| '+str(h.get('error',''))[:60] if h.get('error') else ''}"
+            for s, h in health.items()
+        )
+        cascade_text = f"\nCASCADE TRIGGERED" if cascade else ""
+        messages.append({"role": "user", "content": f"OUTPUT: {cmd_output[:200]}\n{feedback}{cascade_text}\nHEALTH:\n{sh_text}\n\nStep {final_step+1}/{max_steps}. Next command:"})
         messages.append({"role": "assistant", "content": cmd})
         
-        try:
-            r = client.post("/step", json={"action": {"command": cmd}})
-            d = r.json()
-            step_obs = d.get("observation", d)
-        except:
-            break
+        r3 = client.post("/step", json={"action": {"command": cmd}})
+        d = r3.json()
+        final_step += 1
         
-        done = d.get("done", step_obs.get("done", False))
-        cmd_output = step_obs.get("command_output", "")[:300]
-        feedback = step_obs.get("feedback", "")
-        step_health = step_obs.get("service_health", {})
-        cascade = step_obs.get("cascade_triggered", False)
-        
-        final_step = i + 1
-        
-        if done:
+        if d.get("done", d.get("observation", d).get("done", False)):
             resolved = True
             break
         
-        # If cascade triggered, fix the cascade target too
-        if cascade:
-            cascade_broken = [s for s, h in step_health.items() if h.get("status") != "healthy"]
-            if cascade_broken:
-                cascade_svc = cascade_broken[0]
-                # Add cascade observation
-                ch_text = "\n".join(f"  {s}: {h.get('status','')} {'| '+str(h.get('error',''))[:80] if h.get('error') else ''}" for s, h in step_health.items())
-                cascade_alert = step_obs.get("cascade_alert", "")
-                messages.append({"role": "user", "content": f"OUTPUT: {cmd_output[:200]}\n{feedback}\n\nCASCADE: {cascade_alert}\n\nHEALTH:\n{ch_text}\n\nStep {i+3}/{max_steps}. Next command:"})
-                
-                fix_cmd = f"restart_service {cascade_svc}"
-                messages.append({"role": "assistant", "content": fix_cmd})
-                
-                try:
-                    r2 = client.post("/step", json={"action": {"command": fix_cmd}})
-                    d2 = r2.json()
-                    if d2.get("done", d2.get("observation", d2).get("done", False)):
-                        resolved = True
-                        final_step = i + 2
-                        break
-                except:
-                    pass
-        
-        # Build next observation for user
-        if i < len(commands) - 1:
-            sh_text = "\n".join(f"  {s}: {h.get('status','')} {'| '+str(h.get('error',''))[:80] if h.get('error') else ''}" for s, h in step_health.items())
-            messages.append({"role": "user", "content": f"OUTPUT: {cmd_output[:200]}\n{feedback}\n\nHEALTH:\n{sh_text}\n\nStep {i+2}/{max_steps}. Next command:"})
+        if final_step >= max_steps:
+            break
     
     if resolved:
         return {"messages": messages, "scenario_id": scenario_id, "tier": tier, "steps": final_step}, scenario_id
     return None, scenario_id
 
-# Generate episodes
-sft_examples = []
-seen_scenarios = set()
-TIERS = ["warmup", "warmup", "warmup", "single_fault", "single_fault", "cascade", "multi_cascade", "adversarial"]
-TARGET = 60
 
-attempts = 0
-while len(sft_examples) < TARGET and attempts < 200:
-    tier = TIERS[attempts % len(TIERS)]
-    example, scenario_id = run_expert_episode(tier)
-    attempts += 1
+# ═══════════════════════════════════════════════════════════════
+# Generate BALANCED data: 20 per tier
+# ═══════════════════════════════════════════════════════════════
+
+TARGET_PER_TIER = 20
+TIERS = ["warmup", "single_fault", "cascade", "multi_cascade", "adversarial"]
+tier_examples = {t: [] for t in TIERS}
+tier_attempts = {t: 0 for t in TIERS}
+MAX_ATTEMPTS_PER_TIER = 80
+
+print("=" * 80)
+print("BALANCED SFT DATA GENERATION — 20 per tier, 100 total")
+print("=" * 80)
+
+for tier in TIERS:
+    print(f"\n--- TIER: {tier} (target: {TARGET_PER_TIER}) ---")
     
-    if example:
-        sft_examples.append(example)
-        is_new = scenario_id not in seen_scenarios
-        seen_scenarios.add(scenario_id)
-        print(f"  [{len(sft_examples):2d}/{TARGET}] {tier:15s} | {scenario_id:40s} | {example['steps']} steps {'(NEW)' if is_new else ''}")
-    else:
-        print(f"  [skip] {tier:15s} | {scenario_id:40s} | not resolved")
+    while len(tier_examples[tier]) < TARGET_PER_TIER and tier_attempts[tier] < MAX_ATTEMPTS_PER_TIER:
+        example, scenario_id = run_expert_episode(tier)
+        tier_attempts[tier] += 1
+        
+        if example:
+            tier_examples[tier].append(example)
+            print(f"  [{len(tier_examples[tier]):2d}/{TARGET_PER_TIER}] {scenario_id:45s} | {example['steps']} steps")
+        else:
+            print(f"  [skip] {scenario_id:45s} | not resolved")
+        
+        time.sleep(0.2)
     
-    time.sleep(0.2)
+    print(f"  Result: {len(tier_examples[tier])}/{TARGET_PER_TIER} ({tier_attempts[tier]} attempts)")
+
+# Combine all
+all_examples = []
+for tier in TIERS:
+    all_examples.extend(tier_examples[tier])
 
 # Save
 with open("sft_training_data.jsonl", "w", encoding="utf-8") as f:
-    for ex in sft_examples:
+    for ex in all_examples:
         f.write(json.dumps(ex, ensure_ascii=False) + "\n")
 
-print(f"\n{'='*60}")
-print(f"SFT DATA: {len(sft_examples)} examples across {len(seen_scenarios)} unique scenarios")
-print(f"Tiers: {dict((t, sum(1 for e in sft_examples if e['tier']==t)) for t in set(e['tier'] for e in sft_examples))}")
-print(f"{'='*60}")
+# Report
+print(f"\n{'='*80}")
+print(f"BALANCED SFT DATA COMPLETE: {len(all_examples)} examples")
+print(f"{'='*80}")
+scenarios_seen = set()
+for tier in TIERS:
+    tier_scenarios = set(e["scenario_id"] for e in tier_examples[tier])
+    scenarios_seen.update(tier_scenarios)
+    print(f"  {tier:15s}: {len(tier_examples[tier]):2d} examples | {len(tier_scenarios)} unique scenarios | {tier_attempts[tier]} attempts")
+print(f"\n  Total unique scenarios: {len(scenarios_seen)}")
 
 client.close()
