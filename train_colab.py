@@ -444,7 +444,19 @@ def main():
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
-    # Save rewards
+    # Save per-episode rewards (for Colab plotting)
+    episode_log = []
+    for i, r in enumerate(all_rewards):
+        episode_log.append({
+            "episode": i + 1,
+            "reward": r,
+            "resolved": r > 0,
+        })
+
+    with open("training_rewards.json", "w") as f:
+        json.dump(episode_log, f, indent=2)
+
+    # Also save summary in model dir
     with open(f"{args.output_dir}/rewards.json", "w") as f:
         json.dump({
             "rewards": all_rewards,
@@ -454,6 +466,44 @@ def main():
             "task": args.task_id,
             "episodes": args.episodes,
         }, f, indent=2)
+
+    # ── Auto-generate plots (saved as .png for submission) ────────────
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        episodes = list(range(1, len(all_rewards) + 1))
+
+        # Reward curve
+        ax1.plot(episodes, all_rewards, color='#3498db', linewidth=1.5, alpha=0.6)
+        window = min(10, len(all_rewards))
+        if window > 1:
+            rolling = [sum(all_rewards[max(0,i-window):i])/min(i, window) for i in range(1, len(all_rewards)+1)]
+            ax1.plot(episodes, rolling, color='#e74c3c', linewidth=3, label=f'{window}-ep rolling avg')
+        ax1.set_xlabel('Episode', fontsize=12)
+        ax1.set_ylabel('Total Reward', fontsize=12)
+        ax1.set_title(f'GRPO Reward — {args.task_id}', fontsize=14)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Resolution rate
+        resolved_flags = [1 if r > 0 else 0 for r in all_rewards]
+        cum_rate = [sum(resolved_flags[:i+1])/(i+1)*100 for i in range(len(resolved_flags))]
+        ax2.plot(episodes, cum_rate, color='#2ecc71', linewidth=2)
+        ax2.set_xlabel('Episode', fontsize=12)
+        ax2.set_ylabel('Cumulative Resolution Rate (%)', fontsize=12)
+        ax2.set_title('Resolution Rate Over Training', fontsize=14)
+        ax2.set_ylim(0, 100)
+        ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig('reward_curve.png', dpi=150)
+        print("Saved: reward_curve.png")
+    except ImportError:
+        print("matplotlib not available — skipping plot generation")
 
     print(f"\nFinal stats:")
     print(f"  Episodes:    {args.episodes}")
@@ -471,3 +521,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

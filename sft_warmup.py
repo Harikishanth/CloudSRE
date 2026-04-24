@@ -131,6 +131,36 @@ def main():
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
+    # ── Auto-generate loss curve plot ──
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        log_history = trainer.state.log_history
+        steps = [entry['step'] for entry in log_history if 'loss' in entry]
+        losses = [entry['loss'] for entry in log_history if 'loss' in entry]
+
+        if steps and losses:
+            # Save training log as JSON for Colab
+            training_log = [{"step": s, "loss": l} for s, l in zip(steps, losses)]
+            with open(f"{args.output_dir}/training_log.json", "w") as f:
+                json.dump(training_log, f, indent=2)
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.plot(steps, losses, color='#e74c3c', linewidth=2)
+            ax.set_xlabel('Training Step', fontsize=12)
+            ax.set_ylabel('Loss', fontsize=12)
+            ax.set_title(f'SFT Loss Curve ({len(sft_data)} examples, {args.epochs} epochs)', fontsize=14)
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig('sft_loss_curve.png', dpi=150)
+            print("Saved: sft_loss_curve.png")
+        else:
+            print("No loss entries found in trainer log history")
+    except ImportError:
+        print("matplotlib not available — skipping plot generation")
+
     if args.hf_repo:
         print(f"Pushing to HF Hub: {args.hf_repo}")
         model.push_to_hub(args.hf_repo, token=os.environ.get("HF_TOKEN"))
@@ -145,3 +175,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

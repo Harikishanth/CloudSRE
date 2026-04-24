@@ -156,9 +156,31 @@ cloud_sre_v2/
 │   └── logger.py               # Structured JSON logging
 ├── sft_warmup.py               # Phase 1: SFT on expert demos
 ├── train_colab.py              # Phase 2: GRPO training loop
-├── sft_training_data.jsonl     # 60 expert SRE demonstrations
+├── sft_training_data.jsonl     # 100 expert SRE demonstrations
+├── evaluate.py                 # Formal evaluation framework
+├── CloudSRE_Training.ipynb     # Colab training notebook
+├── blog.md                     # Project writeup
 └── inference.py                # Inference with any LLM
 ```
+
+## 📈 Training Results
+
+<!-- IMPORTANT: Replace these with actual screenshots after running training -->
+
+### Phase 1: SFT Loss Curve
+![SFT Loss Curve](sft_loss_curve.png)
+
+### Phase 2: GRPO Reward Curve
+![GRPO Reward Curve](reward_curve.png)
+
+## 🔗 Deliverables
+
+| Deliverable | Link |
+|-------------|------|
+| **HF Space** | [DarDrax/CloudSRE-Environment](https://huggingface.co/spaces/DarDrax/CloudSRE-Environment) |
+| **Training Notebook** | [CloudSRE_Training.ipynb](./CloudSRE_Training.ipynb) |
+| **Blog / Writeup** | [blog.md](./blog.md) |
+| **GitHub** | [Harikishanth/CloudSRE](https://github.com/Harikishanth/CloudSRE) |
 
 ## License
 
