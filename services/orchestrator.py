@@ -548,6 +548,34 @@ class ServiceOrchestrator:
                     "memory_mb": 200,
                 }
 
+        # DB connection pool exhaustion → payment degraded
+        if self.database and getattr(self.database, '_is_connection_exhausted', False):
+            if "payment" in health and health["payment"]["status"] == "healthy":
+                health["payment"] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": "DB connection pool exhausted — all queries failing",
+                    "error_rate": 0.95,
+                    "latency_p95_ms": 60000,
+                    "requests_total": 0,
+                    "cpu_percent": 5,
+                    "memory_mb": 150,
+                }
+
+        # Queue paused → worker degraded
+        if self.queue and getattr(self.queue, '_is_paused', False):
+            if "worker" in health and health["worker"]["status"] == "healthy":
+                health["worker"] = {
+                    "status": "degraded",
+                    "degraded": True,
+                    "error": "Queue consumer paused — messages accumulating, not being processed",
+                    "error_rate": 0.5,
+                    "latency_p95_ms": 5000,
+                    "requests_total": 0,
+                    "cpu_percent": 5,
+                    "memory_mb": 100,
+                }
+
         return health
 
     # ── Utilities ────────────────────────────────────────────────────────
