@@ -365,15 +365,20 @@ class CloudSREEnvironment(Environment):
         cascade_just_fired = (cascade_result is not None)  # Cascade triggered THIS step
 
         # Guard 1: Agent must have executed at least one "fix" command
-        # (restart, drain, kill, config) before we consider resolution.
-        # This prevents episodes from resolving when the agent just runs
-        # diagnostic commands and happens to find everything healthy.
         has_attempted_fix = any(
             h.get("cmd_type") == "fix" for h in self._history
         ) or cmd_type == "fix"
 
         # Guard 2: Minimum 2 steps — prevents 1-step auto-resolve
         min_steps_met = self._step_count >= 2
+
+        # DEBUG: Log resolution check details
+        logger.info(
+            f"  RESOLUTION CHECK: all_healthy={all_healthy} | "
+            f"cmd_type={cmd_type} | cascade_just_fired={cascade_just_fired} | "
+            f"has_attempted_fix={has_attempted_fix} | min_steps={min_steps_met} | "
+            f"step={self._step_count}"
+        )
 
         if (all_healthy and cmd_type in ("fix", "health_check")
                 and not cascade_just_fired
@@ -578,20 +583,22 @@ class CloudSREEnvironment(Environment):
     # ── Resolution Check ─────────────────────────────────────────────────
 
     def _check_all_resolved(self) -> bool:
-        """Check if all services are healthy.
-
-        For cascade scenarios, both primary AND cascade must be resolved.
-        The cascade must actually TRIGGER before the episode can end.
-        """
+        """Check if all services are healthy."""
         health = self.orchestrator.check_health()
-        all_healthy = all(
-            svc["status"] == "healthy"
-            for svc in health.values()
-        )
+
+        unhealthy = {
+            name: svc["status"]
+            for name, svc in health.items()
+            if svc["status"] != "healthy"
+        }
+
+        all_healthy = len(unhealthy) == 0
+
+        if unhealthy:
+            logger.info(f"  _check_all_resolved: UNHEALTHY → {unhealthy}")
 
         # CRITICAL: If scenario has cascade rules but cascade hasn't triggered yet,
-        # the episode is NOT resolved — the agent fixed the primary fault but
-        # the cascade hasn't fired yet. We must wait for it.
+        # the episode is NOT resolved
         has_cascade_rules = (
             self._current_scenario
             and hasattr(self._current_scenario, 'cascade_rules')
@@ -599,8 +606,7 @@ class CloudSREEnvironment(Environment):
         )
 
         if has_cascade_rules and not self._cascade_triggered:
-            # Primary fault fixed but cascade hasn't triggered yet.
-            # Don't end the episode — the cascade should fire soon.
+            logger.info(f"  _check_all_resolved: CASCADE NOT YET TRIGGERED → False")
             return False
 
         # If cascade was triggered, it must also be resolved
@@ -612,8 +618,10 @@ class CloudSREEnvironment(Environment):
             )
             if cascade_service and cascade_service in health:
                 if health[cascade_service]["status"] != "healthy":
+                    logger.info(f"  _check_all_resolved: CASCADE SERVICE {cascade_service} still unhealthy → False")
                     return False
 
+        logger.info(f"  _check_all_resolved: all_healthy={all_healthy}")
         return all_healthy
 
     # ── Transcript Saving + Rubric Monitoring (RLVE) ─────────────────────
