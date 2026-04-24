@@ -144,6 +144,7 @@ def run_episode(
     generate_fn,  # callable(prompt) -> str
     task_id: str = "warmup",
     max_turns: int = 30,  # upper bound; actual limit comes from environment
+    use_hints: bool = True,  # set False for organic training (Qwen3+)
 ) -> dict:
     """Run one full SRE episode.
 
@@ -190,34 +191,35 @@ def run_episode(
                 f"  $ {h['cmd']}" for h in history[-5:]
             ) + "\n\n"
 
-        # Turn-aware hints — guide untrained model toward fix commands
-        has_fix = any(
-            "restart" in h["cmd"] or "drain" in h["cmd"] or "fix:" in h["cmd"]
-            for h in history
-        )
-
-        # Detect if the issue is queue-related (needs drain, not restart)
-        queue_issue = any(
-            "queue" in (h.get("error") or "").lower() or "queue" in (h.get("status") or "").lower()
-            for h in health.values()
-        )
-
-        # Build the right fix suggestion based on fault type
-        if broken:
-            if queue_issue:
-                fix_suggestion = "queue drain 200"
-            else:
-                fix_suggestion = f"restart_service {broken[0]}"
-        else:
-            fix_suggestion = "status"
-
+        # Turn-aware hints — only when use_hints=True (disabled with --no-hints)
         urgency = ""
-        if turn >= 6 and not has_fix and broken:
-            urgency = f"\n⚠️ CRITICAL: Time almost up! Run exactly: {fix_suggestion}"
-        elif turn >= 3 and not has_fix and broken:
-            urgency = f"\n💡 You've diagnosed enough. Fix it now: {fix_suggestion}"
-        elif turn >= 1 and broken:
-            urgency = f"\n💡 Broken services detected: {', '.join(broken)}. After diagnosing, use: {fix_suggestion}"
+        if use_hints:
+            has_fix = any(
+                "restart" in h["cmd"] or "drain" in h["cmd"] or "fix:" in h["cmd"]
+                for h in history
+            )
+
+            # Detect if the issue is queue-related (needs drain, not restart)
+            queue_issue = any(
+                "queue" in (h.get("error") or "").lower() or "queue" in (h.get("status") or "").lower()
+                for h in health.values()
+            )
+
+            # Build the right fix suggestion based on fault type
+            if broken:
+                if queue_issue:
+                    fix_suggestion = "queue drain 200"
+                else:
+                    fix_suggestion = f"restart_service {broken[0]}"
+            else:
+                fix_suggestion = "status"
+
+            if turn >= 6 and not has_fix and broken:
+                urgency = f"\n⚠️ CRITICAL: Time almost up! Run exactly: {fix_suggestion}"
+            elif turn >= 3 and not has_fix and broken:
+                urgency = f"\n💡 You've diagnosed enough. Fix it now: {fix_suggestion}"
+            elif turn >= 1 and broken:
+                urgency = f"\n💡 Broken services detected: {', '.join(broken)}. After diagnosing, use: {fix_suggestion}"
 
         prompt = f"""{SYSTEM_PROMPT}
 
@@ -286,6 +288,7 @@ def main():
     parser.add_argument("--lora-r", type=int, default=8, help="LoRA rank (8 for 0.5B-1.5B, 16 for 3B+)")
     parser.add_argument("--output-dir", default="cloudsre-agent", help="Output directory")
     parser.add_argument("--wandb-project", default="", help="WandB project name (enables logging)")
+    parser.add_argument("--no-hints", action="store_true", help="Disable turn-aware hints (for Qwen3+ organic training)")
     args = parser.parse_args()
 
     has_gpu = check_gpu()
@@ -396,6 +399,7 @@ def main():
                     generate_fn=generate,
                     task_id=args.task_id,
                     max_turns=args.max_turns,
+                    use_hints=not args.no_hints,
                 )
                 break  # success
             except Exception as e:
