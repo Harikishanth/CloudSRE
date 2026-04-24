@@ -84,11 +84,11 @@ def _warmup_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
             scenario_id="warmup_queue_overflow",
             failure_type="queue_overflow",
             target_service="worker",
-            params={"fill": 800},
+            params={"fill": 550},
             difficulty=0.15,
             alert_message=(
                 "🚨 INCIDENT — 06:30 UTC | Severity: P2\n"
-                "Worker queue depth critical — 800/1000 messages.\n"
+                "Worker queue depth critical — 550/1000 messages.\n"
                 "Payment service unable to enqueue new orders.\n"
                 "User reports: 'Checkout takes forever', 'Orders not going through'"
             ),
