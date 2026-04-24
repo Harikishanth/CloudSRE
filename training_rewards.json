@@ -1,252 +1,252 @@
 [
   {
     "episode": 1,
-    "reward": -6.545,
+    "reward": -1.142,
     "resolved": false
   },
   {
     "episode": 2,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 3,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 4,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.73,
+    "resolved": true
   },
   {
     "episode": 5,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 6,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 7,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 8,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.815,
+    "resolved": true
   },
   {
     "episode": 9,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 10,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 11,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 12,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 13,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 14,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 15,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 16,
-    "reward": -5.945,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 17,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.9400000000000001,
+    "resolved": true
   },
   {
     "episode": 18,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 19,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 20,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 21,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.5800000000000001,
+    "resolved": true
   },
   {
     "episode": 22,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 23,
-    "reward": -5.925,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 24,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 25,
-    "reward": -6.545,
+    "reward": -0.014999999999999951,
     "resolved": false
   },
   {
     "episode": 26,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 27,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 28,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 29,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 30,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 31,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 32,
-    "reward": -5.925,
+    "reward": -2.201,
     "resolved": false
   },
   {
     "episode": 33,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 34,
-    "reward": -6.585,
+    "reward": -1.718,
     "resolved": false
   },
   {
     "episode": 35,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 36,
-    "reward": -6.545,
+    "reward": -2.201,
     "resolved": false
   },
   {
     "episode": 37,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 38,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 39,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 40,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 41,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 42,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 43,
-    "reward": -6.585,
+    "reward": -2.001,
     "resolved": false
   },
   {
     "episode": 44,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 45,
-    "reward": -6.545,
+    "reward": -1.7550000000000001,
     "resolved": false
   },
   {
     "episode": 46,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 47,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 48,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 49,
-    "reward": -6.545,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   },
   {
     "episode": 50,
-    "reward": -6.585,
-    "resolved": false
+    "reward": 0.77,
+    "resolved": true
   }
 ]
