@@ -76,10 +76,11 @@ Command:"""
 
 
 def generate_with_logprobs(model, tokenizer, prompt: str, max_new_tokens: int = 60):
-    """Generate text AND return log probabilities for REINFORCE."""
+    """Generate text, then recompute log probs WITH gradients via forward pass."""
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     input_len = inputs["input_ids"].shape[1]
 
+    # Step 1: Generate tokens (no grad needed — just sampling)
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -87,23 +88,22 @@ def generate_with_logprobs(model, tokenizer, prompt: str, max_new_tokens: int = 
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
-            return_dict_in_generate=True,
-            output_scores=True,
         )
 
-    generated_ids = outputs.sequences[0, input_len:]
-    scores = outputs.scores  # list of logits at each generation step
-
-    # Compute log probabilities of the actually generated tokens
-    log_probs = []
-    for i, score in enumerate(scores):
-        if i >= len(generated_ids):
-            break
-        token_id = generated_ids[i]
-        log_prob = F.log_softmax(score[0], dim=-1)[token_id]
-        log_probs.append(log_prob)
-
+    generated_ids = outputs[0, input_len:]
     generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+
+    # Step 2: Recompute log probs WITH gradients (forward pass on full sequence)
+    full_ids = outputs[0:1]  # [1, seq_len]
+    forward_out = model(input_ids=full_ids)
+    logits = forward_out.logits[0, input_len-1:-1, :]  # logits that predict generated tokens
+
+    log_probs = []
+    for i, token_id in enumerate(generated_ids):
+        if i >= logits.shape[0]:
+            break
+        lp = F.log_softmax(logits[i], dim=-1)[token_id]
+        log_probs.append(lp)
 
     return generated_text, log_probs
 
