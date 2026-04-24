@@ -15,7 +15,7 @@ pinned: false
 
 # CloudSRE v2 — Cascading Incident Response Environment
 
-**The first RL environment that models real cascading production failures.**
+**The first RL environment that models real cascading production failures with real infrastructure.**
 
 > Fix the database lock → payment floods → worker OOMs → frontend 502s.  
 > The agent must PREDICT what breaks AFTER the fix.
@@ -23,83 +23,91 @@ pinned: false
 ## 🏗️ Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              ONE CONTAINER (HF Space)                │
-│                                                      │
-│   OpenEnv Server (:7860)                             │
-│   ├── Scenario Engine (17 static + dynamic)          │
-│   ├── Cascade Engine (real causal chains)             │
-│   ├── Adaptive Sampling (self-improving)              │
-│   └── 5 Deterministic Graders                        │
-│                                                      │
-│   ┌──────────┐ ┌──────┐ ┌────────┐ ┌──────────┐     │
-│   │ payment  │ │ auth │ │ worker │ │ frontend │     │
-│   │ :8001    │ │:8002 │ │ :8003  │ │ :8004    │     │
-│   └────┬─────┘ └──┬───┘ └───┬────┘ └────┬─────┘     │
-│        │          │         │           │            │
-│   ┌────▼──────────▼─────────▼───────────▼────┐       │
-│   │           Shared Infrastructure          │       │
-│   │  SQLite DB │ Message Queue │ Log Files   │       │
-│   └──────────────────────────────────────────┘       │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  ONE CONTAINER (HF Space)                    │
+│                                                              │
+│   OpenEnv Server (:7860)                                     │
+│   ├── Scenario Engine (21 static + ∞ dynamic)                │
+│   ├── Cascade Engine (real causal dependency chains)         │
+│   ├── Adaptive Sampling (self-improving curriculum)          │
+│   └── 5 Deterministic Graders                               │
+│                                                              │
+│   ┌─────────┐ ┌──────┐ ┌────────┐ ┌──────────┐             │
+│   │ payment │ │ auth │ │ worker │ │ frontend │             │
+│   │ :8001   │ │:8002 │ │ :8003  │ │ :8004    │             │
+│   └────┬────┘ └──┬───┘ └───┬────┘ └────┬─────┘             │
+│   ┌────┴────┐ ┌──┴────────┐                                  │
+│   │ cache   │ │notification│                                 │
+│   │ :8005   │ │ :8006     │                                  │
+│   └────┬────┘ └─────┬─────┘                                  │
+│        │            │                                        │
+│   ┌────▼────────────▼──────────────────────────────┐         │
+│   │             Shared Infrastructure              │         │
+│   │  SQLite DB │ Message Queue │ Log Files │ Metrics│         │
+│   └────────────────────────────────────────────────┘         │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## 🎯 What Makes It Different
 
-| Feature | Kube SRE Gym (Winner) | CloudSRE v2 |
-|---------|----------------------|-------------|
+| Feature | Kube SRE Gym | CloudSRE v2 |
+|---------|-------------|-------------|
 | **Cascading failures** | ❌ Independent faults | ✅ Fix triggers new failure |
-| **Real database** | ❌ No DB layer | ✅ Real SQLite with real locks |
-| **Real auth** | ❌ No auth testing | ✅ Real JWT signing/validation |
-| **Real message queue** | ❌ No queue | ✅ File-backed queue with backpressure |
-| **Reset speed** | 30-60 sec | **<1 sec** |
-| **Scenarios** | 7 hardcoded | 17 static + unlimited dynamic |
+| **Services** | 3 simulated | **6 real** (subprocess + ports) |
+| **Database** | ❌ No DB layer | ✅ Real SQLite with real locks |
+| **Auth** | ❌ No auth testing | ✅ Real JWT signing/validation |
+| **Message queue** | ❌ No queue | ✅ File-backed with backpressure |
+| **Cache** | ❌ | ✅ LRU cache with thundering herd |
+| **Reset speed** | 30-60 sec (GKE) | **<1 sec** (subprocess) |
+| **Scenarios** | 7 hardcoded | **21 static + unlimited dynamic** |
 | **Tasks** | 0 in openenv.yaml | **5 graded tasks** |
-| **Self-improvement** | ❌ | ✅ Adaptive weighted sampling |
+| **Curriculum** | ❌ | ✅ Adaptive weighted sampling |
 
-## 🚀 Quick Start
+## 🚀 Training Pipeline
 
-### Run the environment
+### Two-Phase Approach: SFT → GRPO
+
+**Phase 1 — SFT Warmup** (teaches command vocabulary):
 ```bash
-uv run server
-# Environment running at http://localhost:7860
+python sft_warmup.py --model-id unsloth/Qwen3-1.7B --epochs 3
 ```
 
-### Train an agent (GRPO)
-```bash
-# Terminal 1: Start env server
-uv run server
+Uses 60 expert SRE demonstrations across all 5 tiers. Teaches the model valid command formats (`restart_service`, `queue drain`, `cat error.log`).
 
-# Terminal 2: Run training
-python train.py --model-id Qwen/Qwen3-0.6B --task-id warmup --dataset-size 50
+**Phase 2 — GRPO Training** (teaches strategy):
+```bash
+python train_colab.py \
+  --env-url https://dardrax-cloudsre-environment.hf.space \
+  --model-id ./cloudsre-sft-checkpoint \
+  --task-id warmup \
+  --episodes 50 \
+  --no-hints  # organic training for Qwen3+
 ```
 
-### Run inference
-```bash
-HF_TOKEN=your_token python inference.py
-```
+Dense reward signals guide the model from triage → investigation → fix → verification.
 
 ## 📊 5 Task Tiers
 
-| Tier | Task | Difficulty | Scenarios |
-|------|------|-----------|-----------|
-| 1 | `warmup` | 0.15 | Single fault, clear signals |
-| 2 | `single_fault` | 0.35 | + misleading red herrings |
-| 3 | `cascade` | 0.55 | + cascading failure after fix |
-| 4 | `multi_cascade` | 0.75 | + multiple concurrent cascades |
-| 5 | `adversarial` | 0.60-0.90 | Dynamic, unique every episode |
+| Tier | Task | Max Steps | Scenarios | Description |
+|------|------|-----------|-----------|-------------|
+| 1 | `warmup` | 10 | 6 | Single fault, clear signals |
+| 2 | `single_fault` | 15 | 4 | + misleading red herrings |
+| 3 | `cascade` | 20 | 7 | + cascading failure after fix |
+| 4 | `multi_cascade` | 25 | 4 | + multiple concurrent cascades |
+| 5 | `adversarial` | 30 | ∞ dynamic | Unique every episode |
 
 ## 🔧 Agent Action Space
 
-The agent runs **real SRE commands**, not predefined tool calls:
+The agent runs **real SRE commands** against real infrastructure:
 
 ```bash
+status                                     # All services health
 curl http://localhost:8001/healthz          # Real HTTP health check
-curl http://localhost:8001/metrics           # Real Prometheus metrics
-cat /var/log/payment/error.log              # Real structured JSON logs
-sqlite3 /data/app.db 'SELECT count(*) ...'  # Real SQL queries
-restart_service payment                     # Real process restart
-queue drain 10                              # Real queue management
+cat /var/log/payment/error.log             # Real structured JSON logs
+sqlite3 /data/db/main.db 'SELECT ...'      # Real SQL queries
+restart_service payment                    # Real process restart (kill + spawn)
+queue drain 200                            # Real queue management (any rate)
+kill -9 <PID>                              # Real process management
 ```
 
 ## 🌊 The Cascade Mechanic
@@ -112,46 +120,44 @@ Phase 3: Agent must restart payment + drain queue at controlled rate
 
 This is the #1 cause of extended production outages. No other RL environment models it.
 
-## 📈 Training Pipeline
+## 📈 Reward Design
 
-- **Algorithm:** GRPO with LoRA (DAPO loss)
-- **5 reward signals:** total, triage, investigation, fix, cascade
-- **Adaptive sampling:** Environment targets agent's weak scenarios
-- **Multi-panel visualization:** Total reward + phase decomposition
-
-## 🔌 Provider Agnostic
-
-```bash
-LLM_BACKEND=gemini     # Free (default, 1500 req/day)
-LLM_BACKEND=openai     # GPT-4o
-LLM_BACKEND=anthropic  # Claude
-```
+- **Dense per-step rewards** with diminishing returns
+- **Phase progression bonuses** (triage → investigation → fix → verify)
+- **Cascade handling bonus** (+0.2 for managing cascading failures)
+- **Anti-gaming guards** (repeat detection, minimum step requirement)
+- **Efficiency scaling** — faster resolution = higher reward (up to 1.0)
 
 ## 📁 Project Structure
 
 ```
 cloud_sre_v2/
-├── openenv.yaml          # OpenEnv spec (5 tasks, 5 graders)
-├── models.py             # Action/Observation/State contracts
+├── openenv.yaml                # OpenEnv spec (5 tasks, 5 graders)
+├── models.py                   # Action/Observation/State contracts
 ├── server/
 │   ├── cloud_sre_environment.py  # Core MDP + adaptive sampling
-│   ├── constants.py       # 17 scenarios + dynamic generator
-│   ├── graders.py         # 5 deterministic graders
-│   ├── command_executor.py # Routes real SRE commands
-│   └── judge.py           # LLM judge (optional)
-├── services/             # 4 real microservices
-│   ├── payment_service.py # :8001 — SQLite + Queue
-│   ├── auth_service.py    # :8002 — JWT auth
-│   ├── worker_service.py  # :8003 — Queue consumer
-│   ├── frontend_proxy.py  # :8004 — Reverse proxy
-│   └── orchestrator.py    # Process lifecycle
-├── infra/                # Shared infrastructure
-│   ├── database.py       # Real SQLite with fault injection
-│   ├── queue.py          # File-backed message queue
-│   ├── metrics.py        # Prometheus-style metrics
-│   └── logger.py         # Structured JSON logging
-├── train.py              # GRPO training (TRL + vLLM)
-└── inference.py          # Inference with any LLM
+│   ├── app.py                  # FastAPI server + persistent env factory
+│   ├── constants.py            # 21 scenarios + dynamic generator
+│   ├── graders.py              # 5 deterministic graders
+│   ├── command_executor.py     # Routes real SRE commands to infra
+│   └── judge.py                # LLM judge (optional)
+├── services/                   # 6 real microservices
+│   ├── payment_service.py      # :8001 — SQLite + Queue integration
+│   ├── auth_service.py         # :8002 — JWT auth
+│   ├── worker_service.py       # :8003 — Queue consumer
+│   ├── frontend_proxy.py       # :8004 — Reverse proxy
+│   ├── cache_service.py        # :8005 — LRU cache layer
+│   ├── notification_service.py # :8006 — Webhook delivery
+│   └── orchestrator.py         # Process lifecycle management
+├── infra/                      # Shared infrastructure
+│   ├── database.py             # Real SQLite with fault injection
+│   ├── queue.py                # File-backed message queue
+│   ├── metrics.py              # Prometheus-style metrics
+│   └── logger.py               # Structured JSON logging
+├── sft_warmup.py               # Phase 1: SFT on expert demos
+├── train_colab.py              # Phase 2: GRPO training loop
+├── sft_training_data.jsonl     # 60 expert SRE demonstrations
+└── inference.py                # Inference with any LLM
 ```
 
 ## License
