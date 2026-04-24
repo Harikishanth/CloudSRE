@@ -306,18 +306,22 @@ def main():
             max_seq_length=2048,
             load_in_4bit=True,
         )
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=args.lora_r,
-            lora_alpha=args.lora_r * 2,
-            lora_dropout=0.05,
-            # Daniel (Unsloth): "You MUST do LoRA on MLP too, not just attention"
-            # Reference: "LoRA Regret" blog post by Thinking Machines + Unsloth
-            target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",  # attention
-                "gate_proj", "up_proj", "down_proj",      # MLP
-            ],
-            use_gradient_checkpointing="unsloth",  # async gradient offload to RAM
+        # Skip if model already has LoRA adapters (e.g. from SFT checkpoint)
+        if hasattr(model, 'peft_config'):
+            print("Model already has LoRA adapters — reusing SFT adapters for GRPO")
+        else:
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=args.lora_r,
+                lora_alpha=args.lora_r * 2,
+                lora_dropout=0.05,
+                # Daniel (Unsloth): "You MUST do LoRA on MLP too, not just attention"
+                # Reference: "LoRA Regret" blog post by Thinking Machines + Unsloth
+                target_modules=[
+                    "q_proj", "k_proj", "v_proj", "o_proj",  # attention
+                    "gate_proj", "up_proj", "down_proj",      # MLP
+                ],
+                use_gradient_checkpointing="unsloth",  # async gradient offload to RAM
         )
         USE_UNSLOTH = True
         print("Unsloth loaded successfully!")
