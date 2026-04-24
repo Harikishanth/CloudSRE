@@ -432,7 +432,7 @@ class CloudSREEnvironment(Environment):
         # ── Build Observation ────────────────────────────────────────
         service_health = self.orchestrator.check_health()
 
-        return CloudSREObservation(
+        obs = CloudSREObservation(
             alert=self._current_scenario.alert_message if self._current_scenario and not done else "",
             scenario_id=self._current_scenario.scenario_id if self._current_scenario else "",
             task_id=self._current_task_id,
@@ -448,6 +448,19 @@ class CloudSREEnvironment(Environment):
             done=done,
             reward=reward,
         )
+
+        # DEBUG: attach resolution check details (remove before submission)
+        obs.debug_info = {
+            "all_healthy": all_healthy,
+            "cmd_type": cmd_type,
+            "cascade_just_fired": cascade_just_fired,
+            "has_attempted_fix": has_attempted_fix,
+            "min_steps_met": min_steps_met,
+            "step_count": self._step_count,
+            "history_cmd_types": [h.get("cmd_type") for h in self._history],
+        }
+
+        return obs
 
     # ── Phase Detection ──────────────────────────────────────────────────
 
