@@ -195,13 +195,29 @@ def run_episode(
             "restart" in h["cmd"] or "drain" in h["cmd"] or "fix:" in h["cmd"]
             for h in history
         )
+
+        # Detect if the issue is queue-related (needs drain, not restart)
+        queue_issue = any(
+            "queue" in (h.get("error") or "").lower() or "queue" in (h.get("status") or "").lower()
+            for h in health.values()
+        )
+
+        # Build the right fix suggestion based on fault type
+        if broken:
+            if queue_issue:
+                fix_suggestion = "queue drain 50"
+            else:
+                fix_suggestion = f"restart_service {broken[0]}"
+        else:
+            fix_suggestion = "status"
+
         urgency = ""
         if turn >= 6 and not has_fix and broken:
-            urgency = f"\n⚠️ CRITICAL: Time almost up! Run exactly: restart_service {broken[0]}"
+            urgency = f"\n⚠️ CRITICAL: Time almost up! Run exactly: {fix_suggestion}"
         elif turn >= 3 and not has_fix and broken:
-            urgency = f"\n💡 You've diagnosed enough. Fix it now: restart_service {broken[0]}"
+            urgency = f"\n💡 You've diagnosed enough. Fix it now: {fix_suggestion}"
         elif turn >= 1 and broken:
-            urgency = f"\n💡 Broken services detected: {', '.join(broken)}. After diagnosing, use: restart_service <service>"
+            urgency = f"\n💡 Broken services detected: {', '.join(broken)}. After diagnosing, use: {fix_suggestion}"
 
         prompt = f"""{SYSTEM_PROMPT}
 
