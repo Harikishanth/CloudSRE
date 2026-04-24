@@ -16,6 +16,17 @@ import argparse
 import json
 import time
 import os
+import warnings
+import logging
+
+# ── Suppress noisy warnings that flood Colab output ─────────────────────
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*")
+warnings.filterwarnings("ignore", message=".*attention mask API.*")
+warnings.filterwarnings("ignore", message=".*use_return_dict.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
 import httpx
 import torch
 import torch.nn.functional as F
