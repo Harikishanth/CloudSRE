@@ -135,12 +135,6 @@ class CloudSREObservation(Observation):
         description="Whether the episode is complete (resolved, failed, or timed out).",
     )
 
-    # ── Debug (temporary) ──
-    debug_info: dict = Field(
-        default_factory=dict,
-        description="Debug info for resolution check (remove before submission).",
-    )
-
 
 class CloudSREState(State):
     """Episode metadata — internal state not shown to the agent.

@@ -372,12 +372,10 @@ class CloudSREEnvironment(Environment):
         # Guard 2: Minimum 2 steps — prevents 1-step auto-resolve
         min_steps_met = self._step_count >= 2
 
-        # DEBUG: Log resolution check details
-        logger.info(
-            f"  RESOLUTION CHECK: all_healthy={all_healthy} | "
-            f"cmd_type={cmd_type} | cascade_just_fired={cascade_just_fired} | "
-            f"has_attempted_fix={has_attempted_fix} | min_steps={min_steps_met} | "
-            f"step={self._step_count}"
+        # Resolution state logging (debug level only)
+        logger.debug(
+            f"resolution_check: healthy={all_healthy} fix={has_attempted_fix} "
+            f"min_steps={min_steps_met} step={self._step_count}"
         )
 
         if (all_healthy and cmd_type in ("fix", "health_check")
@@ -448,17 +446,6 @@ class CloudSREEnvironment(Environment):
             done=done,
             reward=reward,
         )
-
-        # DEBUG: attach resolution check details (remove before submission)
-        obs.debug_info = {
-            "all_healthy": all_healthy,
-            "cmd_type": cmd_type,
-            "cascade_just_fired": cascade_just_fired,
-            "has_attempted_fix": has_attempted_fix,
-            "min_steps_met": min_steps_met,
-            "step_count": self._step_count,
-            "history_cmd_types": [h.get("cmd_type") for h in self._history],
-        }
 
         return obs
 

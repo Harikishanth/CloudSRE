@@ -568,11 +568,11 @@ class CommandExecutor:
         Supports:
             queue status
             queue depth
-            queue drain 10          (drain 10 messages at controlled rate)
+            queue drain <N>         (drain N messages at controlled rate — SRE chooses N)
             queue drain all         (DANGEROUS — thundering herd!)
             queue pause
             queue resume
-            drain rate=10           (controlled drain alias)
+            drain rate=<N>          (controlled drain alias)
         """
         queue = self.infra.get("queue")
         if not queue:

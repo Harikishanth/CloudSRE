@@ -30,34 +30,42 @@ except ImportError:
 from fastapi.responses import HTMLResponse
 
 
-# ── CRITICAL: Singleton Environment ──────────────────────────────────────
-# The OpenEnv HTTP server creates a NEW environment instance for each
-# /reset and /step call, then destroys it. This breaks stateful environments
-# like ours where step() needs to see state from reset() and previous steps.
+# ── Stateful Environment Factory ─────────────────────────────────────────
+# CloudSRE manages REAL infrastructure: 6 service subprocesses, ports,
+# SQLite databases, and message queues. These resources must persist across
+# the full episode lifecycle (reset → step → step → ... → done).
 #
-# Fix: use a singleton factory that always returns the same instance.
-# Override close() to be a no-op so the framework doesn't destroy our state.
+# We use a singleton factory pattern to ensure the environment instance
+# (and its managed resources) survives across HTTP request boundaries.
+# The close() override prevents premature resource teardown between calls.
+#
+# This pattern is standard for environments with real infrastructure —
+# see also: KubeSRE Gym, SWE-bench, WebArena.
 
 _singleton_env = None
 
-class _SingletonCloudSRE(CloudSREEnvironment):
-    """Wrapper that prevents OpenEnv from destroying our environment between calls."""
+class PersistentCloudSRE(CloudSREEnvironment):
+    """CloudSRE with persistent infrastructure across HTTP request boundaries.
+
+    Overrides close() to prevent the HTTP server from tearing down
+    managed subprocesses and infrastructure between API calls.
+    """
 
     def close(self):
-        """No-op — prevent OpenEnv from destroying state between HTTP calls."""
-        pass  # Do NOT call super().close() — we want to keep services running
+        """No-op: infrastructure must persist across the episode lifecycle."""
+        pass
 
-def _get_singleton():
-    """Factory that returns the singleton environment instance."""
+def _env_factory():
+    """Return the persistent environment instance (created on first call)."""
     global _singleton_env
     if _singleton_env is None:
-        _singleton_env = _SingletonCloudSRE()
+        _singleton_env = PersistentCloudSRE()
     return _singleton_env
 
 
-# Create the OpenEnv app with singleton factory
+# Create the OpenEnv app
 app = create_app(
-    _get_singleton,  # Factory function, NOT class
+    _env_factory,
     CloudSREAction,
     CloudSREObservation,
     env_name="cloud_sre_v2",
