@@ -549,7 +549,7 @@ class ServiceOrchestrator:
                 }
 
         # DB connection pool exhaustion → payment degraded
-        if self.database and getattr(self.database, '_is_connection_exhausted', False):
+        if self.database and getattr(self.database, '_max_connections', 50) == 0:
             if "payment" in health and health["payment"]["status"] == "healthy":
                 health["payment"] = {
                     "status": "degraded",
