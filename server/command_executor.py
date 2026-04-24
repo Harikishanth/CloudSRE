@@ -597,7 +597,7 @@ class CommandExecutor:
                 return f"WARNING: Drained {len(messages)} messages at once (thundering herd risk!)"
             else:
                 rate_match = re.search(r'(\d+)', cmd)
-                rate = int(rate_match.group(1)) if rate_match else 50
+                rate = int(rate_match.group(1)) if rate_match else 200
                 messages = queue.drain_controlled(rate=rate)
                 # No need to explicitly clear degradation — check_health()
                 # dynamically checks queue.depth() and clears when < 500

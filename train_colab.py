@@ -205,7 +205,7 @@ def run_episode(
         # Build the right fix suggestion based on fault type
         if broken:
             if queue_issue:
-                fix_suggestion = "queue drain 50"
+                fix_suggestion = "queue drain 200"
             else:
                 fix_suggestion = f"restart_service {broken[0]}"
         else:
