@@ -30,9 +30,34 @@ except ImportError:
 from fastapi.responses import HTMLResponse
 
 
-# Create the OpenEnv app
+# ── CRITICAL: Singleton Environment ──────────────────────────────────────
+# The OpenEnv HTTP server creates a NEW environment instance for each
+# /reset and /step call, then destroys it. This breaks stateful environments
+# like ours where step() needs to see state from reset() and previous steps.
+#
+# Fix: use a singleton factory that always returns the same instance.
+# Override close() to be a no-op so the framework doesn't destroy our state.
+
+_singleton_env = None
+
+class _SingletonCloudSRE(CloudSREEnvironment):
+    """Wrapper that prevents OpenEnv from destroying our environment between calls."""
+
+    def close(self):
+        """No-op — prevent OpenEnv from destroying state between HTTP calls."""
+        pass  # Do NOT call super().close() — we want to keep services running
+
+def _get_singleton():
+    """Factory that returns the singleton environment instance."""
+    global _singleton_env
+    if _singleton_env is None:
+        _singleton_env = _SingletonCloudSRE()
+    return _singleton_env
+
+
+# Create the OpenEnv app with singleton factory
 app = create_app(
-    CloudSREEnvironment,
+    _get_singleton,  # Factory function, NOT class
     CloudSREAction,
     CloudSREObservation,
     env_name="cloud_sre_v2",
