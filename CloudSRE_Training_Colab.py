@@ -4,35 +4,39 @@
 # 
 # WHO:    For Hari's friends who are new to Colab + HF.
 # WHAT:   Train a 1.5B model to fix cloud infrastructure incidents.
-# WHERE:  Google Colab (free T4 GPU) → HuggingFace Space (environment).
+# WHERE:  Google Colab (free T4 GPU) OR HuggingFace Space (T4 GPU).
 # HOW:    Copy-paste each cell. Don't change ANYTHING unless told to.
 #
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  FRIEND ASSIGNMENT — READ THIS FIRST                            ║
 # ║                                                                   ║
-# ║  FRIEND A (starts FIRST):                                        ║
+# ║  🟦 COLAB FRIEND (starts FIRST):                                 ║
+# ║    → Platform: Google Colab (free T4)                             ║
 # ║    → Trains: warmup + single_fault (the easy tiers)              ║
 # ║    → Uses base model (no previous training needed)               ║
 # ║    → Pushes result as "leg1" when done                           ║
 # ║    → In Cells 6, 7, 9: use the defaults (LEG 1)                 ║
 # ║                                                                   ║
-# ║  FRIEND B (starts AFTER Friend A says "pushed"):                 ║
+# ║  🟧 HF FRIEND (starts AFTER Colab Friend says "pushed"):        ║
+# ║    → Platform: HuggingFace Space (T4 GPU — cheapest option)      ║
 # ║    → Trains: cascade + multi_cascade (the hard tiers)            ║
-# ║    → Downloads Friend A's model automatically                    ║
+# ║    → Downloads Colab Friend's model automatically                ║
 # ║    → Pushes result as "leg2" when done                           ║
 # ║    → In Cells 6, 7, 9: UNCOMMENT the LEG 2 lines               ║
 # ║                                                                   ║
-# ║  HARI (starts AFTER Friend B says "pushed"):                     ║
+# ║  🟩 HARI (starts AFTER HF Friend says "pushed"):                 ║
 # ║    → Trains: adversarial (the death spirals)                     ║
 # ║    → In Cells 6, 7, 9: UNCOMMENT the LEG 3 lines               ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 #
-# TIME ESTIMATE: ~45 min per leg on Colab T4
+# TIME ESTIMATE: ~45 min per leg on T4
 # =============================================================================
 
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
-# CELL 1: GPU CHECK (Run this FIRST — if it says "No GPU", stop and fix)
+# CELL 1: GPU CHECK
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
+# If it says "No GPU", stop and fix before continuing.
 # ═══════════════════════════════════════════════════════════════════════════════
 import torch
 print("=" * 60)
@@ -43,15 +47,17 @@ if torch.cuda.is_available():
     print("   You're good to go!")
 else:
     print("❌ NO GPU DETECTED!")
-    print("   Go to: Runtime → Change runtime type → Hardware accelerator → T4 GPU")
+    print("   Colab: Runtime → Change runtime type → T4 GPU")
+    print("   HF:    Make sure you selected a T4 GPU Space")
     print("   Then re-run this cell.")
 print("=" * 60)
 
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 2: INSTALL EVERYTHING (takes ~3-4 minutes, be patient)
-# ═══════════════════════════════════════════════════════════════════════════════
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
 # DO NOT MODIFY THIS CELL.
+# ═══════════════════════════════════════════════════════════════════════════════
 print("Installing dependencies... this takes 3-4 minutes...")
 
 # Install unsloth FIRST (it pins specific versions)
@@ -67,11 +73,12 @@ print("\n✅ All dependencies installed!")
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 3: LOGIN TO HUGGINGFACE + WANDB
-# ═══════════════════════════════════════════════════════════════════════════════
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
 # This will ask for your tokens. Paste them when prompted.
 # 
 # HuggingFace token: https://huggingface.co/settings/tokens (create a WRITE token)
 # WandB token: https://wandb.ai/authorize
+# ═══════════════════════════════════════════════════════════════════════════════
 
 from huggingface_hub import login as hf_login
 import wandb
@@ -96,6 +103,7 @@ print("\n✅ Both logins successful!")
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 4: CLONE THE REPO
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
 # ═══════════════════════════════════════════════════════════════════════════════
 import os
 os.chdir("/content")
@@ -112,9 +120,9 @@ print(f"\n✅ Repo cloned. Working directory: {os.getcwd()}")
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 5: VERIFY ENVIRONMENT IS ALIVE
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
+# If this fails, the Space might be sleeping — go to the URL and wake it up.
 # ═══════════════════════════════════════════════════════════════════════════════
-# This checks that the HF Space environment is running and responding.
-# If this fails, the Space might be sleeping — go to the HF Space URL and wake it up.
 
 import httpx
 
@@ -146,24 +154,16 @@ except Exception as e:
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 6: LOAD THE MODEL
+# ⚠️ READ CAREFULLY — different for each friend!
+#
+# 🟦 COLAB FRIEND: Use the default (LEG 1 — base model). Don't change anything.
+# 🟧 HF FRIEND:    COMMENT OUT the LEG 1 line, UNCOMMENT the LEG 2 line.
+# 🟩 HARI:          COMMENT OUT the LEG 1 line, UNCOMMENT the LEG 3 line.
 # ═══════════════════════════════════════════════════════════════════════════════
-# 
-# ⚠️ READ THIS ⚠️
-# 
-# IF YOU ARE LEG 1 (first person training):
-#   Use the base model: "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
-#
-# IF YOU ARE LEG 2 (your friend already pushed "leg1"):
-#   Use: "DarDrax/cloudsre-1.5B-leg1"
-#
-# IF YOU ARE LEG 3 (Hari, after friend pushed "leg2"):
-#   Use: "DarDrax/cloudsre-1.5B-leg2"
-#
-# CHANGE THE LINE BELOW TO MATCH YOUR LEG:
 
-MODEL_ID = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"  # ← LEG 1 (base model)
-# MODEL_ID = "DarDrax/cloudsre-1.5B-leg1"             # ← LEG 2 (uncomment this)
-# MODEL_ID = "DarDrax/cloudsre-1.5B-leg2"             # ← LEG 3 (uncomment this)
+MODEL_ID = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"  # ← 🟦 COLAB FRIEND uses this (LEG 1)
+# MODEL_ID = "DarDrax/cloudsre-1.5B-leg1"             # ← 🟧 HF FRIEND uses this (LEG 2)
+# MODEL_ID = "DarDrax/cloudsre-1.5B-leg2"             # ← 🟩 HARI uses this (LEG 3)
 
 print(f"Loading model: {MODEL_ID}")
 print("This takes 2-3 minutes on a T4...")
@@ -197,19 +197,16 @@ print(f"   Memory used:          {torch.cuda.memory_allocated()/1e9:.1f} GB")
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 7: 🏃 START TRAINING 🏃
+# ⚠️ READ CAREFULLY — different for each friend!
+#
+# 🟦 COLAB FRIEND: Use the default (warmup,single_fault). Don't change anything.
+# 🟧 HF FRIEND:    COMMENT OUT LEG 1 line, UNCOMMENT LEG 2 line.
+# 🟩 HARI:          COMMENT OUT LEG 1 line, UNCOMMENT LEG 3 line.
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# ⚠️ READ THIS ⚠️
-#
-# IF YOU ARE LEG 1: curriculum = "warmup,single_fault"
-# IF YOU ARE LEG 2: curriculum = "cascade,multi_cascade"
-# IF YOU ARE LEG 3: curriculum = "adversarial"
-#
-# CHANGE THE LINE BELOW TO MATCH YOUR LEG:
 
-CURRICULUM = "warmup,single_fault"  # ← LEG 1
-# CURRICULUM = "cascade,multi_cascade"  # ← LEG 2 (uncomment this)
-# CURRICULUM = "adversarial"            # ← LEG 3 (uncomment this)
+CURRICULUM = "warmup,single_fault"      # ← 🟦 COLAB FRIEND uses this (LEG 1)
+# CURRICULUM = "cascade,multi_cascade"  # ← 🟧 HF FRIEND uses this (LEG 2)
+# CURRICULUM = "adversarial"            # ← 🟩 HARI uses this (LEG 3)
 
 # ──── DO NOT CHANGE ANYTHING BELOW THIS LINE ────
 
@@ -242,6 +239,7 @@ print("=" * 70)
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 8: 📊 PLOT TRAINING RESULTS (run after training finishes)
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
 # ═══════════════════════════════════════════════════════════════════════════════
 import json
 import matplotlib.pyplot as plt
@@ -295,18 +293,21 @@ except FileNotFoundError:
 
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
-# CELL 9: 🏁 PUSH MODEL TO HUGGINGFACE (MANDATORY — your friend needs this!)
+# CELL 9: 🏁 PUSH MODEL TO HUGGINGFACE
+# ⚠️ READ CAREFULLY — different for each friend!
+#
+# 🟦 COLAB FRIEND: Use the default (leg1). Don't change anything.
+#                   After this finishes, TEXT THE GROUP: "Pushed! 🟧 HF Friend go!"
+#
+# 🟧 HF FRIEND:    COMMENT OUT LEG 1 line, UNCOMMENT LEG 2 line.
+#                   After this finishes, TEXT THE GROUP: "Pushed! 🟩 Hari go!"
+#
+# 🟩 HARI:          COMMENT OUT LEG 1 line, UNCOMMENT LEG 3 line.
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# ⚠️ CHANGE THE REPO NAME BELOW TO MATCH YOUR LEG ⚠️
-#
-# IF YOU ARE LEG 1: push to "DarDrax/cloudsre-1.5B-leg1"
-# IF YOU ARE LEG 2: push to "DarDrax/cloudsre-1.5B-leg2"
-# IF YOU ARE LEG 3: push to "DarDrax/cloudsre-1.5B-FINAL"
 
-PUSH_REPO = "DarDrax/cloudsre-1.5B-leg1"  # ← CHANGE THIS FOR YOUR LEG
-# PUSH_REPO = "DarDrax/cloudsre-1.5B-leg2"   # ← LEG 2
-# PUSH_REPO = "DarDrax/cloudsre-1.5B-FINAL"  # ← LEG 3
+PUSH_REPO = "DarDrax/cloudsre-1.5B-leg1"    # ← 🟦 COLAB FRIEND pushes this
+# PUSH_REPO = "DarDrax/cloudsre-1.5B-leg2"  # ← 🟧 HF FRIEND pushes this
+# PUSH_REPO = "DarDrax/cloudsre-1.5B-FINAL" # ← 🟩 HARI pushes this
 
 from unsloth import FastLanguageModel
 
@@ -327,6 +328,7 @@ print(f"\n📣 Tell your friend: 'Pushed! Start your leg!'")
 # %%
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 10: 📸 SAVE WANDB SCREENSHOT (for README)
+# 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
 # ═══════════════════════════════════════════════════════════════════════════════
 print("=" * 60)
 print("📊 Your WandB graphs are at:")
