@@ -7,10 +7,25 @@
 # WHERE:  Google Colab (free T4 GPU) → HuggingFace Space (environment).
 # HOW:    Copy-paste each cell. Don't change ANYTHING unless told to.
 #
-# RELAY FORMAT:
-#   Leg 1 (Friend A): warmup + single_fault   → push "leg1" model
-#   Leg 2 (Friend B): cascade + multi_cascade  → push "leg2" model
-#   Leg 3 (Hari):     adversarial              → push "FINAL" model
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  FRIEND ASSIGNMENT — READ THIS FIRST                            ║
+# ║                                                                   ║
+# ║  FRIEND A (starts FIRST):                                        ║
+# ║    → Trains: warmup + single_fault (the easy tiers)              ║
+# ║    → Uses base model (no previous training needed)               ║
+# ║    → Pushes result as "leg1" when done                           ║
+# ║    → In Cells 6, 7, 9: use the defaults (LEG 1)                 ║
+# ║                                                                   ║
+# ║  FRIEND B (starts AFTER Friend A says "pushed"):                 ║
+# ║    → Trains: cascade + multi_cascade (the hard tiers)            ║
+# ║    → Downloads Friend A's model automatically                    ║
+# ║    → Pushes result as "leg2" when done                           ║
+# ║    → In Cells 6, 7, 9: UNCOMMENT the LEG 2 lines               ║
+# ║                                                                   ║
+# ║  HARI (starts AFTER Friend B says "pushed"):                     ║
+# ║    → Trains: adversarial (the death spirals)                     ║
+# ║    → In Cells 6, 7, 9: UNCOMMENT the LEG 3 lines               ║
+# ╚═══════════════════════════════════════════════════════════════════╝
 #
 # TIME ESTIMATE: ~45 min per leg on Colab T4
 # =============================================================================
@@ -23,7 +38,7 @@ import torch
 print("=" * 60)
 if torch.cuda.is_available():
     gpu_name = torch.cuda.get_device_name(0)
-    gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"✅ GPU FOUND: {gpu_name} ({gpu_mem:.1f} GB)")
     print("   You're good to go!")
 else:
