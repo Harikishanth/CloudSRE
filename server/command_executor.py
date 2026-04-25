@@ -34,22 +34,72 @@ logger = logging.getLogger(__name__)
 # Maximum output length to prevent observation explosion
 MAX_OUTPUT_CHARS = 2000
 
+# ── Cloud DNS Mapping ────────────────────────────────────────────────────
+# Maps cloud-style internal domains to localhost ports.
+# The agent types:  curl http://payment.us-east-1.internal/healthz
+# We route it to:   curl http://localhost:8001/healthz
+# This makes the environment look like a real multi-region cloud deployment
+# while keeping the 30x speed advantage of local OS processes.
+
+CLOUD_DNS = {
+    # US-EAST-1 (Primary region)
+    "payment.us-east-1.internal": "localhost:8001",
+    "auth.us-east-1.internal": "localhost:8002",
+    "billing.us-east-1.internal": "localhost:8013",
+    "gateway.us-east-1.internal": "localhost:8008",
+    "loadbalancer.us-east-1.internal": "localhost:8016",
+    "config.us-east-1.internal": "localhost:8014",
+    # EU-WEST-1 (Compute region)
+    "worker.eu-west-1.internal": "localhost:8003",
+    "scheduler.eu-west-1.internal": "localhost:8009",
+    "search.eu-west-1.internal": "localhost:8007",
+    "storage.eu-west-1.internal": "localhost:8010",
+    "metrics_collector.eu-west-1.internal": "localhost:8011",
+    # AP-SOUTH-1 (Edge region)
+    "frontend.ap-south-1.internal": "localhost:8004",
+    "cache.ap-south-1.internal": "localhost:8005",
+    "notification.ap-south-1.internal": "localhost:8006",
+    "email.ap-south-1.internal": "localhost:8012",
+    "dns.ap-south-1.internal": "localhost:8015",
+}
+
+# Reverse map: localhost:port -> cloud domain (for output beautification)
+CLOUD_DNS_REVERSE = {v: k for k, v in CLOUD_DNS.items()}
+
+# Region grouping for status dashboard
+CLOUD_REGIONS = {
+    "us-east-1": [
+        ("payment", 8001), ("auth", 8002), ("billing", 8013),
+        ("gateway", 8008), ("loadbalancer", 8016), ("config", 8014),
+    ],
+    "eu-west-1": [
+        ("worker", 8003), ("scheduler", 8009), ("search", 8007),
+        ("storage", 8010), ("metrics_collector", 8011),
+    ],
+    "ap-south-1": [
+        ("frontend", 8004), ("cache", 8005), ("notification", 8006),
+        ("email", 8012), ("dns", 8015),
+    ],
+}
+
 
 class CommandExecutor:
-    """Executes real SRE commands on real running services.
+    """Executes real SRE commands against a simulated multi-region cloud infrastructure.
 
-    This is the brain of the environment. When the agent sends a command like:
-        curl http://localhost:8001/healthz
-    This class actually EXECUTES it against the real payment_service and
-    returns the REAL HTTP response.
+    When the agent sends a command like:
+        curl http://payment.us-east-1.internal/healthz
+    This class resolves the cloud domain to localhost:8001 and executes
+    the REAL HTTP request against the running service process.
 
-    Kube SRE Gym equivalent: k8s_commands.py (719 lines, kubectl only)
-    Ours: Multiple command types across 7 layers.
+    Supports both cloud-style domains and raw localhost URLs.
     """
 
-    # All known service names — used for command routing when self.services is empty
-    # (subprocess mode where services run as separate OS processes)
-    KNOWN_SERVICES = {"payment", "auth", "worker", "frontend", "cache", "notification"}
+    # All known service names
+    KNOWN_SERVICES = {
+        "payment", "auth", "worker", "frontend", "cache", "notification",
+        "search", "gateway", "scheduler", "storage", "metrics_collector",
+        "email", "billing", "config", "dns", "loadbalancer",
+    }
 
     def __init__(self, services: Dict[str, Any], infra: Dict[str, Any], orchestrator=None):
         """
@@ -183,10 +233,24 @@ class CommandExecutor:
         return "health_check"
 
     def _extract_url(self, cmd: str) -> Optional[str]:
-        """Extract URL from a curl command."""
-        # Match http:// or https:// URLs
+        """Extract URL from a curl command.
+
+        Handles cloud domain interception:
+            http://payment.us-east-1.internal/healthz -> http://localhost:8001/healthz
+        Also accepts raw localhost URLs for backward compatibility.
+        """
         match = re.search(r'(https?://[^\s"\']+)', cmd)
-        return match.group(1) if match else None
+        if not match:
+            return None
+        url = match.group(1)
+
+        # Cloud DNS interception: resolve fake domains to localhost
+        for cloud_domain, local_addr in CLOUD_DNS.items():
+            if cloud_domain in url:
+                url = url.replace(cloud_domain, local_addr)
+                break
+
+        return url
 
     def _extract_headers(self, cmd: str) -> Dict[str, str]:
         """Extract -H headers from curl command."""
@@ -541,10 +605,16 @@ class CommandExecutor:
         if not service_name:
             return "Error: could not identify target service"
 
-        # Release DB lock if restarting a DB-dependent service (payment, worker)
+        # Release DB lock on restart — any service restart should clear
+        # the shared DB lock since the lock holder is being killed
         db = self.infra.get("database")
-        if db and service_name in ("payment", "worker") and db._is_fault_locked:
+        if db and getattr(db, '_is_fault_locked', False):
             db.release_lock()
+
+        # Release queue pause when restarting worker — worker is the consumer
+        queue = self.infra.get("queue")
+        if queue and service_name == "worker" and getattr(queue, '_is_paused', False):
+            queue.release_pause()
 
         # Use orchestrator for REAL restart (uvicorn stop + start)
         if self.orchestrator and hasattr(self.orchestrator, 'restart_service'):
@@ -621,6 +691,8 @@ class CommandExecutor:
             config payment rate_limit=100
             config auth jwt_ttl=3600
             config worker batch_size=10
+
+        Works in both in-process and subprocess modes.
         """
         parts = cmd.split()
         if len(parts) < 3:
@@ -633,15 +705,28 @@ class CommandExecutor:
             return f"Error: invalid config format. Use: config {service_name} key=value"
 
         key, value = config_str.split("=", 1)
+
+        # In-process mode: direct service access
         svc = self.services.get(service_name)
-        if not svc:
+        if svc:
+            if not hasattr(svc, "_config"):
+                svc._config = {}
+            svc._config[key] = value
+            svc.logger.info(f"Config updated: {key}={value}")
+            return f"Config updated: {service_name}.{key} = {value}"
+
+        # Subprocess mode: validate service name and apply via orchestrator
+        if service_name not in self.KNOWN_SERVICES:
             return f"Error: service '{service_name}' not found"
 
-        # Store config on the service
-        if not hasattr(svc, "_config"):
-            svc._config = {}
-        svc._config[key] = value
-        svc.logger.info(f"Config updated: {key}={value}")
+        # Config changes can clear degraded state for config-related faults
+        if self.orchestrator:
+            degraded = getattr(self.orchestrator, '_degraded_services', {})
+            if service_name in degraded:
+                reason = degraded[service_name].lower()
+                if any(kw in reason for kw in ["config", "rate_limit", "poisoned", "locked"]):
+                    degraded.pop(service_name, None)
+
         return f"Config updated: {service_name}.{key} = {value}"
 
     # ── Layer 7: Diagnosis/Fix Statements ────────────────────────────────
@@ -662,57 +747,82 @@ class CommandExecutor:
         Supports:
             fix: restart payment service and drain queue at rate=10
             fix: rotate JWT signing key in auth service
+
+        Attempts to extract and execute actionable commands from the text.
         """
         fix_text = cmd.split(":", 1)[1].strip() if ":" in cmd else cmd
-        return f"Fix recorded: {fix_text}"
+        fix_lower = fix_text.lower()
+        results = [f"Fix recorded: {fix_text}"]
+
+        # Attempt to extract and execute embedded actions
+        service_name = self._match_service_name(fix_text)
+
+        if "restart" in fix_lower and service_name:
+            restart_result = self._handle_restart(f"systemctl restart {service_name}")
+            results.append(f"  -> {restart_result}")
+
+        if "drain" in fix_lower:
+            rate_match = re.search(r'rate[=\s]*(\d+)', fix_lower)
+            rate = rate_match.group(1) if rate_match else "10"
+            drain_result = self._handle_queue(f"queue drain {rate}")
+            results.append(f"  -> {drain_result}")
+
+        if "resume" in fix_lower and "queue" in fix_lower:
+            resume_result = self._handle_queue("queue resume")
+            results.append(f"  -> {resume_result}")
+
+        return "\n".join(results)
 
     # ── Status Overview ──────────────────────────────────────────────────
 
     def _handle_status(self) -> str:
-        """Check service health by making REAL HTTP requests to each service.
+        """Cloud-style service health dashboard grouped by region.
 
-        This actually curls each service's /healthz endpoint via httpx.
-        If a service is crashed, the HTTP call will REALLY fail with
-        'Connection refused'. No fake status strings.
+        Makes REAL HTTP requests to each service's /healthz endpoint.
+        Displays results as a multi-region cloud dashboard.
         """
         import httpx
 
-        port_map = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004, "cache": 8005, "notification": 8006}
         lines = []
+        lines.append("=" * 72)
+        lines.append("  CLOUD SERVICE DASHBOARD")
+        lines.append("=" * 72)
+        lines.append(f"{'REGION':<14} {'SERVICE':<20} {'STATUS':<12} {'HEALTH'}")
+        lines.append("-" * 72)
 
-        for name, port in port_map.items():
-            try:
-                with httpx.Client(timeout=2.0) as client:
-                    r = client.get(f"http://localhost:{port}/healthz")
-                    if r.status_code == 200:
-                        lines.append(f"● {name}.service - active (running) port={port}")
-                    else:
-                        body = r.text[:100]
-                        lines.append(f"● {name}.service - degraded (HTTP {r.status_code}) port={port}")
-                        lines.append(f"  └─ {body}")
-            except httpx.ConnectError:
-                lines.append(f"○ {name}.service - inactive (dead) port={port}")
-                lines.append(f"  └─ Connection refused — process not running")
-            except httpx.TimeoutException:
-                lines.append(f"● {name}.service - degraded (timeout) port={port}")
-            except Exception as e:
-                lines.append(f"○ {name}.service - error: {str(e)[:60]}")
+        for region, services in CLOUD_REGIONS.items():
+            for name, port in services:
+                try:
+                    with httpx.Client(timeout=2.0) as client:
+                        r = client.get(f"http://localhost:{port}/healthz")
+                        if r.status_code == 200:
+                            lines.append(f"{region:<14} {name:<20} {'RUNNING':<12} Healthy")
+                        else:
+                            body = r.text[:40].replace('\n', ' ')
+                            lines.append(f"{region:<14} {name:<20} {'DEGRADED':<12} HTTP {r.status_code}: {body}")
+                except httpx.ConnectError:
+                    lines.append(f"{region:<14} {name:<20} {'DOWN':<12} ConnectionRefused")
+                except httpx.TimeoutException:
+                    lines.append(f"{region:<14} {name:<20} {'TIMEOUT':<12} NoResponse")
+                except Exception as e:
+                    lines.append(f"{region:<14} {name:<20} {'ERROR':<12} {str(e)[:30]}")
 
         # Infrastructure
-        lines.append("")
+        lines.append("-" * 72)
         db = self.infra.get("database")
         if db:
             m = db.get_metrics()
-            status = "locked" if m['db_is_locked'] else "active"
-            lines.append(f"● database.service - {status}  errors={m['db_errors_total']}  queries={m['db_queries_total']}")
+            db_status = 'LOCKED' if m['db_is_locked'] else 'ACTIVE'
+            lines.append(f"{'infra':<14} {'rds-primary':<20} {db_status:<12} errors={m['db_errors_total']} queries={m['db_queries_total']}")
 
         queue = self.infra.get("queue")
         if queue:
             m = queue.get_metrics()
-            lines.append(f"● queue.service - depth={m['queue_depth']}/{m['queue_max_size']}  paused={m['queue_is_paused']}")
+            q_status = 'PAUSED' if m['queue_is_paused'] else 'ACTIVE'
+            lines.append(f"{'infra':<14} {'sqs-main':<20} {q_status:<12} depth={m['queue_depth']}/{m['queue_max_size']}")
 
+        lines.append("=" * 72)
         return "\n".join(lines)
-
     # ── Utilities ────────────────────────────────────────────────────────
 
     def _extract_path(self, cmd: str) -> Optional[str]:
@@ -734,19 +844,17 @@ class CommandExecutor:
         return (
             f"bash: {cmd.split()[0]}: command not found\n"
             "Available commands:\n"
-            "  curl http://localhost:<port>/healthz         — HTTP health check\n"
-            "  curl http://localhost:<port>/metrics          — Service metrics\n"
-            "  cat /var/log/<service>/error.log              — Read logs\n"
-            "  grep \"pattern\" /var/log/<service>/error.log   — Search logs\n"
-            "  ls /data/queue/                               — List queue messages\n"
-            "  sqlite3 /data/app.db 'SELECT ...'             — Query database\n"
-            "  ps aux                                        — List processes\n"
-            "  kill -9 <service>                              — Kill a service\n"
-            "  systemctl restart <service>                    — Restart a service\n"
-            "  systemctl status                               — Service status\n"
-            "  queue status|depth|drain                       — Queue management\n"
-            "  diagnose: <text>                               — Record diagnosis\n"
-            "  fix: <text>                                    — Record fix\n"
+            "  curl http://<svc>.<region>.internal/healthz   -- service health check\n"
+            "  curl http://<svc>.<region>.internal/metrics   -- service metrics\n"
+            "  cat /var/log/<service>/error.log              -- read error logs\n"
+            "  sqlite3 /data/app.db 'SELECT ...'             -- query RDS\n"
+            "  restart_service <service>                     -- restart service\n"
+            "  status                                        -- cloud dashboard\n"
+            "  queue status|depth|drain                      -- SQS management\n"
+            "  diagnose: <text>                              -- record diagnosis\n"
+            "  fix: <text>                                   -- apply fix\n"
+            "\nRegions: us-east-1, eu-west-1, ap-south-1\n"
+            "Example: curl http://payment.us-east-1.internal/healthz\n"
         )
 
     def get_metrics(self) -> Dict[str, int]:

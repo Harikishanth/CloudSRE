@@ -1,7 +1,7 @@
 """
-CloudSRE v2 — Service Orchestrator.
+CloudSRE v2 — Service Orchestrator (Hybrid OS-Level + HTTP Fault Injection).
 
-Manages the lifecycle of all 4 microservices + infrastructure.
+Manages the lifecycle of all 16 microservices + infrastructure.
 Each service runs as a SEPARATE OS PROCESS with its own PID.
 
 This is NOT threading. Each service is a real process:
@@ -10,10 +10,29 @@ This is NOT threading. Each service is a real process:
   - Real signal handling (kill -9 actually kills it)
   - Real port binding (Connection refused when dead)
 
-Fault injection works ACROSS processes because:
-  - DB lock: SQLite EXCLUSIVE transaction on shared file → all processes blocked
-  - Queue overflow: File-backed queue on shared directory → all processes see it
-  - Process crash: process.kill() sends real SIGTERM/SIGKILL
+FAULT INJECTION — THREE PHYSICAL TIERS:
+
+  Tier 1 — OS-Level (POSIX signals):
+    SIGKILL: process_crash — physically kills process, port stops listening
+    SIGSTOP: scheduler_stuck, config_locked, dns_failure, smtp_down,
+             circuit_breaker_stuck, rate_limit_zero — freezes process,
+             TCP connections physically timeout
+    SIGCONT: Used by restart to resume frozen processes
+
+  Tier 2 — Physical Infrastructure:
+    SQLite EXCLUSIVE lock: db_lock — blocks ALL processes sharing the DB file
+    File-backed queue overflow: queue_overflow — real files on disk
+    fallocate/file write: disk_full — real disk consumption
+    DB corruption: data_corruption — physical garbage bytes in SQLite file
+
+  Tier 3 — HTTP State (for faults that can't be OS-level without root):
+    /fault_inject endpoint: Service returns real HTTP 503/429/507 from healthz
+    Used for: cache_invalidation, webhook_storm, index_corruption, etc.
+
+Death Spirals emerge NATURALLY through TCP:
+  - SIGSTOP dns → gateway can't resolve → ConnectTimeout
+  - SIGKILL auth → payment can't authenticate → ConnectionRefused
+  No scripted re-injection needed for Tier 1 faults.
 """
 
 import os
@@ -23,7 +42,9 @@ import random
 import asyncio
 import signal
 import subprocess
+import threading
 import logging
+import tempfile
 from typing import Dict, Any, Optional, List
 
 from cloud_sre_v2.infra.database import Database
@@ -56,16 +77,16 @@ SERVICE_PORTS = {
 
 
 class ServiceOrchestrator:
-    """Manages all services as SEPARATE OS PROCESSES.
+    """Manages all 16 services as SEPARATE OS PROCESSES.
 
-    Each service runs in its own Python process:
-      - payment_service  → PID 12345, port 8001
-      - auth_service     → PID 12346, port 8002
-      - worker_service   → PID 12347, port 8003
-      - frontend_proxy   → PID 12348, port 8004
+    Each service runs in its own Python process with a unique PID and port:
+      payment(:8001) auth(:8002) worker(:8003) frontend(:8004) cache(:8005)
+      notification(:8006) search(:8007) gateway(:8008) scheduler(:8009)
+      storage(:8010) metrics_collector(:8011) email(:8012) billing(:8013)
+      config(:8014) dns(:8015) loadbalancer(:8016)
 
-    Kill a service = process.kill() → real SIGTERM → port stops listening
-    Restart = spawn new subprocess → new PID → port opens again
+    Kill a service = process.kill() -> real SIGTERM -> port stops listening
+    Restart = spawn new subprocess -> new PID -> port opens again
     """
 
     def __init__(
@@ -87,9 +108,34 @@ class ServiceOrchestrator:
         # Process tracking: {name: {"proc": Popen, "pid": int, "port": int}}
         self._processes: Dict[str, dict] = {}
         self._crashed_services: set = set()
-        self._degraded_services: Dict[str, str] = {}  # {name: reason} — services broken by cascade
-        self._latency_injected: Dict[str, int] = {}  # {name: latency_ms} — simulated network latency
+        self._degraded_services: Dict[str, str] = {}  # {name: reason} — fallback for HTTP failures
+        self._latency_injected: Dict[str, int] = {}  # {name: latency_ms}
         self._running = False
+
+        # Active fault tracking — {service: fault_type}
+        # Used by re-injection guard to prevent fixing downstream without upstream
+        self._active_faults: Dict[str, str] = {}
+
+        # Cascade state
+        self._armed_cascade = None
+
+        # Service dependency graph — if upstream is broken, downstream auto-degrades
+        # This creates "Death Spirals" that 70B models can't solve zero-shot
+        self._dependency_graph: Dict[str, List[str]] = {
+            # DNS is foundational — everything depends on it
+            "gateway": ["dns"],
+            "loadbalancer": ["dns", "gateway"],
+            # Auth is needed by everything that handles users
+            "payment": ["auth", "gateway"],
+            "billing": ["payment", "auth"],
+            "frontend": ["gateway", "auth", "cache"],
+            # Worker depends on queue + scheduler
+            "worker": ["scheduler"],
+            "notification": ["email", "worker"],
+            # Config affects everything
+            "search": ["config", "storage"],
+            "metrics_collector": ["config"],
+        }
 
     def start(self):
         """Start all infrastructure and services as separate processes."""
@@ -191,12 +237,23 @@ class ServiceOrchestrator:
         """Restart a service — kill old process, spawn new one.
 
         New process gets a NEW PID. This is a REAL restart.
+
+        RE-INJECTION GUARD: If this service has an upstream dependency
+        that is still broken, the fault will re-inject after restart.
+        The agent MUST fix the root cause (upstream) first.
         """
         if name not in self._processes:
             return f"Service '{name}' not found"
 
         port = self._processes[name]["port"]
         old_pid = self._processes[name]["pid"]
+
+        # SIGCONT any SIGSTOP'd process before killing (can't kill a frozen process cleanly)
+        if sys.platform != "win32":
+            try:
+                os.kill(old_pid, signal.SIGCONT)
+            except (ProcessLookupError, OSError):
+                pass
 
         # Kill if still running
         if name in self._crashed_services:
@@ -223,8 +280,79 @@ class ServiceOrchestrator:
         self._degraded_services.pop(name, None)
         self._latency_injected.pop(name, None)
 
+        # Clear fault via HTTP in case service was only degraded (not crashed)
+        self._clear_fault_via_http(name)
+
+        # Clear from active faults (this service was explicitly restarted)
+        self._active_faults.pop(name, None)
+
+        # RE-INJECTION GUARD: Check if upstream dependencies are still broken
+        # If upstream is broken, this service will degrade again immediately
+        reinjection_msg = self._check_dependency_reinjection(name)
+
         logger.info(f"  SERVICE RESTARTED: {name} PID={old_pid}→{new_pid} port={port}")
-        return f"Service {name} restarted (PID {old_pid}→{new_pid}, port {port})"
+        result = f"Service {name} restarted (PID {old_pid}→{new_pid}, port {port})"
+        if reinjection_msg:
+            result += f"\n⚠ WARNING: {reinjection_msg}"
+        return result
+
+    def _check_dependency_reinjection(self, service_name: str) -> Optional[str]:
+        """Check if a restarted service should re-degrade due to broken upstream.
+
+        This is the core of the "Death Spiral" mechanic:
+        - Agent restarts payment service (which is broken)
+        - But gateway is ALSO broken (upstream dependency)
+        - payment comes back up but immediately starts failing
+          because gateway can't route traffic to it
+
+        The ONLY way to fix this is to fix gateway FIRST, then payment.
+        A 70B model doesn't know this dependency exists.
+        """
+        deps = self._dependency_graph.get(service_name, [])
+        for upstream in deps:
+            # Check if upstream has an active fault
+            if upstream in self._active_faults:
+                upstream_fault = self._active_faults[upstream]
+                degraded_msg = (
+                    f"Upstream dependency '{upstream}' is still broken "
+                    f"({upstream_fault}) — {service_name} re-degrading"
+                )
+                # Re-inject degradation via real HTTP
+                self._inject_fault_via_http(
+                    service_name, f"upstream_dependency_failure",
+                    f"Cannot operate: upstream '{upstream}' is down ({upstream_fault})"
+                )
+                self._active_faults[service_name] = f"upstream_{upstream}_{upstream_fault}"
+                self._write_service_log(service_name, "error",
+                    f"Service re-degraded: upstream dependency '{upstream}' "
+                    f"has active fault: {upstream_fault}")
+                logger.info(f"  RE-INJECTION: {service_name} re-degraded (upstream {upstream} broken)")
+                return degraded_msg
+        return None
+
+    def _propagate_fault_to_dependents(self, source_service: str, fault_type: str):
+        """When a service gets a fault, propagate degradation to its dependents.
+
+        This creates realistic cascading failures:
+        - DNS goes down → gateway, loadbalancer, payment all degrade
+        - Config gets poisoned → search, metrics_collector degrade
+
+        The agent sees multiple services failing and must figure out
+        which one is the ROOT CAUSE vs which ones are just symptoms.
+        """
+        for downstream, upstreams in self._dependency_graph.items():
+            if source_service in upstreams and downstream not in self._active_faults:
+                cascaded_msg = (
+                    f"Degraded: upstream '{source_service}' has fault '{fault_type}'"
+                )
+                self._inject_fault_via_http(
+                    downstream, "upstream_dependency_failure", cascaded_msg
+                )
+                self._active_faults[downstream] = f"upstream_{source_service}_{fault_type}"
+                self._write_service_log(downstream, "error",
+                    f"SERVICE DEGRADED: upstream dependency '{source_service}' "
+                    f"is broken ({fault_type}) — cascading failure")
+                logger.info(f"  DEPENDENCY CASCADE: {source_service}→{downstream}")
 
     def reset(self):
         """Reset everything — kill all processes, wipe state, respawn.
@@ -236,17 +364,38 @@ class ServiceOrchestrator:
         """
         start = time.time()
 
+        # 0. SIGCONT any SIGSTOP'd processes before killing them
+        if sys.platform != "win32":
+            for name, entry in self._processes.items():
+                pid = entry.get("pid")
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGCONT)
+                    except (ProcessLookupError, OSError):
+                        pass
+
         # 1. Kill all running service processes
         for name in list(self._processes.keys()):
             self._stop_service(name)
         self._crashed_services.clear()
         self._degraded_services.clear()
         self._latency_injected.clear()
+        self._active_faults.clear()
 
         # 2. Clear cascade state
         self._armed_cascade = None
 
-        # 3. Reset infrastructure
+        # 2.5. Clean up OS-level fault artifacts
+        # Remove disk_full junk file
+        junk_path = os.path.join(
+            os.environ.get("DATA_DIR", "/data"), "_disk_full_junk.bin")
+        if os.path.exists(junk_path):
+            try:
+                os.remove(junk_path)
+            except OSError:
+                pass
+
+        # 3. Reset infrastructure (also repairs corrupted DB)
         self.database.reset()
         self.queue.reset()
 
@@ -296,12 +445,60 @@ class ServiceOrchestrator:
             "cache_invalidation": self._inject_cache_invalidation,
             "webhook_storm": self._inject_webhook_storm,
             "latency_injection": self._inject_latency,
+            # New service-specific faults
+            "index_corruption": self._inject_index_corruption,
+            "index_lag": self._inject_index_lag,
+            "rate_limit_zero": self._inject_rate_limit_zero,
+            "circuit_breaker_stuck": self._inject_circuit_breaker_stuck,
+            "scheduler_stuck": self._inject_scheduler_stuck,
+            "duplicate_execution": self._inject_duplicate_execution,
+            "disk_full": self._inject_disk_full,
+            "data_corruption": self._inject_data_corruption,
+            "scrape_failure": self._inject_scrape_failure,
+            "retention_full": self._inject_retention_full,
+            "smtp_down": self._inject_smtp_down,
+            "email_queue_overflow": self._inject_email_queue_overflow,
+            "billing_desync": self._inject_billing_desync,
+            "invoice_stuck": self._inject_invoice_stuck,
+            "config_poisoned": self._inject_config_poisoned,
+            "config_locked": self._inject_config_locked,
+            "dns_resolution_failure": self._inject_dns_resolution_failure,
+            "stale_entries": self._inject_stale_entries,
+            "all_backends_removed": self._inject_all_backends_removed,
+            "session_corruption": self._inject_session_corruption,
         }
 
         fn = injectors.get(fault_type)
         if not fn:
             return f"Unknown fault type: {fault_type}"
-        return fn(target, params)
+
+        result = fn(target, params)
+
+        # Track this as an active fault
+        # Map fault_type → the service it primarily affects
+        fault_service_map = {
+            "db_lock": "payment", "db_pool": "payment",
+            "queue_overflow": "worker", "queue_pause": "worker",
+            "cache_invalidation": "cache", "webhook_storm": "notification",
+            "index_corruption": "search", "index_lag": "search",
+            "rate_limit_zero": "gateway", "circuit_breaker_stuck": "gateway",
+            "scheduler_stuck": "scheduler", "duplicate_execution": "scheduler",
+            "disk_full": "storage", "data_corruption": "storage",
+            "scrape_failure": "metrics_collector", "retention_full": "metrics_collector",
+            "smtp_down": "email", "email_queue_overflow": "email",
+            "billing_desync": "billing", "invoice_stuck": "billing",
+            "config_poisoned": "config", "config_locked": "config",
+            "dns_resolution_failure": "dns", "stale_entries": "dns",
+            "all_backends_removed": "loadbalancer", "session_corruption": "loadbalancer",
+        }
+        affected_service = fault_service_map.get(fault_type, target)
+        self._active_faults[affected_service] = fault_type
+
+        # Propagate to dependent services (Death Spiral)
+        if fault_type != "upstream_dependency_failure":
+            self._propagate_fault_to_dependents(affected_service, fault_type)
+
+        return result
 
     def _inject_db_lock(self, target: str, params: dict) -> str:
         """Lock DB via EXCLUSIVE transaction — blocks ALL service processes."""
@@ -348,6 +545,55 @@ class ServiceOrchestrator:
         pid = self._processes[target]["pid"]
         return f"Injected: {target} process crash (PID {pid} killed, port closed)"
 
+
+    def _inject_fault_via_http(self, service_name: str, fault_type: str,
+                                error_message: str, severity: str = "degraded") -> bool:
+        """Send fault injection command to a running service process via HTTP.
+
+        This makes faults REAL — the service process itself starts returning
+        HTTP errors (503, 429, 507) from its /healthz endpoint.
+
+        Args:
+            service_name: Name of the service (e.g., "search")
+            fault_type: Type of fault (e.g., "index_corruption")
+            error_message: Human-readable error description
+            severity: "degraded" (503 from healthz) or "critical" (503 + unhealthy)
+
+        Returns:
+            True if the HTTP injection succeeded, False otherwise.
+        """
+        import httpx
+        port = SERVICE_PORTS.get(service_name)
+        if port is None:
+            return False
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                client.post(f"http://localhost:{port}/fault_inject", json={
+                    "fault_type": fault_type,
+                    "params": {
+                        "error_message": error_message,
+                        "severity": severity,
+                    },
+                })
+            return True
+        except Exception:
+            # Service might be down — fall back to flag
+            self._degraded_services[service_name] = error_message
+            return False
+
+    def _clear_fault_via_http(self, service_name: str) -> bool:
+        """Clear a fault on a running service via HTTP POST to /fault_clear."""
+        import httpx
+        port = SERVICE_PORTS.get(service_name)
+        if port is None:
+            return False
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                client.post(f"http://localhost:{port}/fault_clear", json={})
+            return True
+        except Exception:
+            return False
+
     def _inject_misleading_signal(self, target: str, params: dict) -> str:
         message = params.get("message", "Elevated latency detected (120ms vs 40ms baseline)")
         self._write_service_log(target, "error", f"[MISLEADING] {message}")
@@ -357,9 +603,8 @@ class ServiceOrchestrator:
         """Inject network latency into a service — simulates degraded network."""
         latency_ms = params.get("latency_ms", 3000)
         self._latency_injected[target] = latency_ms
-        self._degraded_services[target] = (
-            f"Network latency spike — p95 latency {latency_ms}ms (baseline: 40ms)"
-        )
+        self._inject_fault_via_http(target, "latency",
+            f"Network latency spike — p95 latency {latency_ms}ms (baseline: 40ms)")
         self._write_service_log(target, "error",
             f"NetworkMonitor: latency spike detected — "
             f"p95={latency_ms}ms, p99={latency_ms*2}ms, baseline=40ms")
@@ -370,7 +615,8 @@ class ServiceOrchestrator:
     def _inject_cache_invalidation(self, target: str, params: dict) -> str:
         """Invalidate cache — triggers cold cache and potential thundering herd."""
         # Mark cache as DEGRADED — cold cache = 100% miss rate = service degraded
-        self._degraded_services["cache"] = "Cache fully invalidated — 100% miss rate, thundering herd risk"
+        self._inject_fault_via_http("cache", "cache_invalidation",
+            "ElastiCache fully invalidated — 100% miss rate, thundering herd risk")
         self._write_service_log("cache", "error",
             "CacheService: FULL INVALIDATION — all entries evicted")
         self._write_service_log("cache", "error",
@@ -383,7 +629,8 @@ class ServiceOrchestrator:
         """Trigger mass webhook retry — simulates Stripe-style retry storm."""
         count = params.get("count", 300)
         # Mark notification as DEGRADED — webhook storm overwhelms delivery
-        self._degraded_services["notification"] = f"Webhook storm ({count} retries) — delivery pipeline overwhelmed"
+        self._inject_fault_via_http("notification", "webhook_storm",
+            f"Webhook storm ({count} retries) — delivery pipeline overwhelmed")
         self._write_service_log("notification", "error",
             f"NotificationService: WEBHOOK STORM — {count} webhooks queued for retry")
         self._write_service_log("notification", "error",
@@ -391,6 +638,253 @@ class ServiceOrchestrator:
         self._write_service_log("payment", "error",
             "PaymentService: Inbound webhook callbacks spiking — 300 req/sec (normal: 10)")
         return f"Injected: webhook storm ({count} retries)"
+
+    def _inject_index_corruption(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("search", "index_corruption",
+            "Search index corrupted — queries returning empty or incorrect results")
+        self._write_service_log("search", "error", "SearchService: index corruption detected, checksum mismatch")
+        return "Injected: search index corruption"
+
+    def _inject_index_lag(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("search", "index_lag",
+            "Search index lagging by >1000 docs — stale query results")
+        self._write_service_log("search", "error", "SearchService: index lag critical — backlog >1000 documents")
+        return "Injected: search index lag"
+
+    def _inject_rate_limit_zero(self, target: str, params: dict) -> str:
+        """Rate limit zero — SIGSTOP the gateway process briefly to cause real connection drops.
+
+        OS-LEVEL: The gateway process is physically frozen for 3 seconds.
+        All TCP connections to it will timeout. Then it resumes but with
+        the HTTP degraded flag so healthz returns 429.
+        """
+        pid = self._processes.get("gateway", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)  # Physically freeze the process
+                threading.Timer(3.0, lambda: os.kill(pid, signal.SIGCONT)).start()
+                self._write_service_log("gateway", "error",
+                    "GatewayService: process frozen by kernel (SIGSTOP) — all connections dropped")
+            except ProcessLookupError:
+                pass
+        # Also set HTTP flag so healthz continues to return 429 after SIGCONT
+        self._inject_fault_via_http("gateway", "rate_limit_zero",
+            "Gateway rate limit misconfigured to 0 RPS — all requests rejected")
+        self._write_service_log("gateway", "error", "GatewayService: rate_limit=0, blocking all traffic")
+        return "Injected: gateway rate limit zero (SIGSTOP + HTTP 429)"
+
+    def _inject_circuit_breaker_stuck(self, target: str, params: dict) -> str:
+        """Circuit breaker stuck — SIGSTOP the gateway to simulate a frozen event loop.
+
+        OS-LEVEL: Gateway process physically frozen for 5 seconds, causing
+        real TCP connection refusals from the OS kernel.
+        """
+        pid = self._processes.get("gateway", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                threading.Timer(5.0, lambda: os.kill(pid, signal.SIGCONT)).start()
+                self._write_service_log("gateway", "error",
+                    "GatewayService: event loop frozen by kernel (SIGSTOP) — circuit breaker stuck")
+            except ProcessLookupError:
+                pass
+        self._inject_fault_via_http("gateway", "circuit_breaker_stuck",
+            "Gateway circuit breaker stuck open — all upstream calls rejected")
+        self._write_service_log("gateway", "error", "GatewayService: circuit breaker OPEN and not auto-resetting")
+        return "Injected: gateway circuit breaker stuck (SIGSTOP + HTTP 503)"
+
+    def _inject_scheduler_stuck(self, target: str, params: dict) -> str:
+        """Scheduler stuck — SIGSTOP the scheduler process entirely.
+
+        OS-LEVEL: The scheduler process is physically frozen by the kernel.
+        Its port stops responding. Worker jobs pile up because the scheduler
+        literally cannot dispatch them. This is REAL — not a flag.
+        """
+        pid = self._processes.get("scheduler", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)  # Physically freeze scheduler
+                self._write_service_log("scheduler", "error",
+                    "SchedulerService: process frozen by kernel (SIGSTOP) — main loop halted")
+            except ProcessLookupError:
+                pass
+        else:
+            # Fallback for Windows: HTTP mock
+            self._inject_fault_via_http("scheduler", "scheduler_stuck",
+                "Scheduler loop stuck — jobs not executing")
+        self._write_service_log("scheduler", "error", "SchedulerService: scheduler loop frozen, no jobs executing")
+        return "Injected: scheduler stuck (SIGSTOP)"
+
+    def _inject_duplicate_execution(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("scheduler", "duplicate_execution",
+            "Scheduler duplicate execution mode — jobs running multiple times")
+        self._write_service_log("scheduler", "error", "SchedulerService: duplicate execution detected across cron jobs")
+        return "Injected: scheduler duplicate execution"
+
+    def _inject_disk_full(self, target: str, params: dict) -> str:
+        """Disk full — create a real large file to consume disk space.
+
+        OS-LEVEL: Creates a physical file in /data/ that consumes real disk.
+        On HF Spaces (Linux), uses fallocate for instant allocation.
+        Size is controlled (50MB, not 10GB) to avoid killing the Space.
+        Combined with HTTP flag so healthz returns 507.
+        """
+        junk_path = os.path.join(
+            os.environ.get("DATA_DIR", "/data"), "_disk_full_junk.bin")
+        try:
+            if sys.platform != "win32":
+                # Linux: fallocate creates a real file allocation instantly
+                subprocess.run(
+                    ["fallocate", "-l", "50M", junk_path],
+                    timeout=5, capture_output=True)
+            else:
+                # Windows: write 50MB of zeros
+                with open(junk_path, "wb") as f:
+                    f.write(b"\x00" * (50 * 1024 * 1024))
+            self._write_service_log("storage", "error",
+                f"StorageService: disk allocation created at {junk_path} — physical disk consumed")
+        except Exception as e:
+            self._write_service_log("storage", "error", f"StorageService: disk fill failed: {e}")
+        # Also set HTTP flag so healthz returns 507
+        self._inject_fault_via_http("storage", "disk_full",
+            "Storage disk full — writes rejected", severity="critical")
+        self._write_service_log("storage", "error", "StorageService: disk usage reached 100%, rejecting write operations")
+        return "Injected: storage disk full (physical file + HTTP 507)"
+
+    def _inject_data_corruption(self, target: str, params: dict) -> str:
+        """Data corruption — write garbage bytes to the SQLite database.
+
+        OS-LEVEL: Physically corrupts the database file by appending random
+        bytes. The next query from any service will get a real
+        sqlite3.DatabaseError: database disk image is malformed.
+        """
+        db_path = self.database._db_path
+        try:
+            with open(db_path, "ab") as f:
+                f.write(os.urandom(512))  # Append 512 random bytes
+            self._write_service_log("storage", "error",
+                f"StorageService: PHYSICAL data corruption — {db_path} modified with garbage bytes")
+        except Exception as e:
+            self._write_service_log("storage", "error", f"StorageService: corruption inject failed: {e}")
+        self._inject_fault_via_http("storage", "data_corruption",
+            "Storage data corruption — checksum mismatches detected")
+        self._write_service_log("storage", "error", "StorageService: object corruption detected, checksum validation failed")
+        return "Injected: storage data corruption (physical DB corruption + HTTP 503)"
+
+    def _inject_scrape_failure(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("metrics_collector", "scrape_failure",
+            "Metrics collector scrape failures — telemetry stale, alerting blind spots")
+        self._write_service_log("metrics_collector", "error", "MetricsCollector: scrape failures on all targets")
+        return "Injected: metrics scrape failure"
+
+    def _inject_retention_full(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("metrics_collector", "retention_full",
+            "Metrics retention full — dropping new datapoints", severity="critical")
+        self._write_service_log("metrics_collector", "error", "MetricsCollector: retention store full, dropping ingestion")
+        return "Injected: metrics retention full"
+
+    def _inject_smtp_down(self, target: str, params: dict) -> str:
+        """SMTP down — SIGSTOP the email process to physically stop delivery.
+
+        OS-LEVEL: Email process frozen. Notification service (which depends
+        on email) will get real TCP timeout when trying to send.
+        """
+        pid = self._processes.get("email", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("email", "error",
+                    "EmailService: process frozen by kernel (SIGSTOP) — SMTP delivery halted")
+            except ProcessLookupError:
+                pass
+        else:
+            self._inject_fault_via_http("email", "smtp_down",
+                "SMTP upstream unavailable — email delivery queue backing up", severity="critical")
+        self._write_service_log("email", "error", "EmailService: SMTP connection refused, queueing all outbound mail")
+        return "Injected: email SMTP down (SIGSTOP)"
+
+    def _inject_email_queue_overflow(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("email", "email_queue_overflow",
+            "Email queue overflow — messages dropped")
+        self._write_service_log("email", "error", "EmailService: queue overflow threshold exceeded, dropping messages")
+        return "Injected: email queue overflow"
+
+    def _inject_billing_desync(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("billing", "billing_desync",
+            "Billing desync — charges recorded but not reconciled")
+        self._write_service_log("billing", "error", "BillingService: ledger desync, pending charges not applied")
+        return "Injected: billing desync"
+
+    def _inject_invoice_stuck(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("billing", "invoice_stuck",
+            "Invoice generation stuck — invoices not being produced")
+        self._write_service_log("billing", "error", "BillingService: invoice generation scheduler stuck")
+        return "Injected: invoice generation stuck"
+
+    def _inject_config_poisoned(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("config", "config_poisoned",
+            "Config store poisoned — critical keys set to unsafe values")
+        self._write_service_log("config", "error", "ConfigService: poisoned config values detected (rate_limit=0, queue_max=5)")
+        return "Injected: config poisoned"
+
+    def _inject_config_locked(self, target: str, params: dict) -> str:
+        """Config locked — SIGSTOP the config process to physically block reads.
+
+        OS-LEVEL: Config service is frozen. Any service trying to read config
+        will get a real TCP timeout (not a mock 423).
+        """
+        pid = self._processes.get("config", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("config", "error",
+                    "ConfigService: process frozen by kernel (SIGSTOP) — config reads blocked")
+            except ProcessLookupError:
+                pass
+        else:
+            self._inject_fault_via_http("config", "config_locked",
+                "Config store locked — read/write operations blocked", severity="critical")
+        self._write_service_log("config", "error", "ConfigService: config store lock engaged, updates blocked")
+        return "Injected: config locked (SIGSTOP)"
+
+    def _inject_dns_resolution_failure(self, target: str, params: dict) -> str:
+        """DNS failure — SIGSTOP the DNS process so all DNS lookups physically timeout.
+
+        OS-LEVEL: DNS process is frozen. Gateway, which depends on DNS,
+        will get real ConnectTimeout when trying to resolve names.
+        The death spiral emerges NATURALLY through TCP — no re-injection needed.
+        """
+        pid = self._processes.get("dns", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("dns", "error",
+                    "DNSService: process frozen by kernel (SIGSTOP) — all lookups will timeout")
+            except ProcessLookupError:
+                pass
+        else:
+            self._inject_fault_via_http("dns", "dns_resolution_failure",
+                "DNS resolution failure — lookups returning NXDOMAIN", severity="critical")
+        self._write_service_log("dns", "error", "DNSService: resolution disabled, all lookups failing")
+        return "Injected: DNS resolution failure (SIGSTOP)"
+
+    def _inject_stale_entries(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("dns", "stale_entries",
+            "DNS stale entries — services routed to dead endpoints")
+        self._write_service_log("dns", "error", "DNSService: stale cache entries serving invalid hosts")
+        return "Injected: DNS stale entries"
+
+    def _inject_all_backends_removed(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("loadbalancer", "all_backends_removed",
+            "Load balancer has no healthy backends — traffic returning 503", severity="critical")
+        self._write_service_log("loadbalancer", "error", "LoadBalancer: all backends removed from active pool")
+        return "Injected: all backends removed"
+
+    def _inject_session_corruption(self, target: str, params: dict) -> str:
+        self._inject_fault_via_http("loadbalancer", "session_corruption",
+            "Sticky-session corruption — users routed inconsistently")
+        self._write_service_log("loadbalancer", "error", "LoadBalancer: sticky session table corrupted")
+        return "Injected: load balancer session corruption"
 
     # ── Log Writing ──────────────────────────────────────────────────────
 
@@ -470,37 +964,68 @@ class ServiceOrchestrator:
     # ── Health Check ─────────────────────────────────────────────────────
 
     def check_health(self) -> Dict[str, dict]:
-        """Check health via REAL HTTP calls to each service process."""
+        """Check health via REAL HTTP calls to each service process.
+
+        Uses a single httpx.Client for all 16 checks to minimize
+        connection overhead during training (called 3x per step).
+        """
         import httpx
 
         health = {}
-        for name, port in SERVICE_PORTS.items():
-            if name in self._crashed_services:
-                health[name] = {
-                    "status": "crashed",
-                    "degraded": False,
-                    "error": f"Process killed — PID {self._processes.get(name, {}).get('pid', '?')}",
-                    "error_rate": 1.0,
-                    "latency_p95_ms": 0,
-                    "requests_total": 0,
-                    "cpu_percent": 0,
-                    "memory_mb": 0,
-                }
-            elif name in self._degraded_services:
-                # Service is running but degraded (cascade effect)
-                health[name] = {
-                    "status": "degraded",
-                    "degraded": True,
-                    "error": self._degraded_services[name],
-                    "error_rate": 0.8,
-                    "latency_p95_ms": 5000,
-                    "requests_total": 0,
-                    "cpu_percent": 95,
-                    "memory_mb": 450,
-                }
-            else:
-                try:
-                    with httpx.Client(timeout=2.0) as client:
+        with httpx.Client(timeout=2.0) as client:
+            for name, port in SERVICE_PORTS.items():
+                if name in self._crashed_services:
+                    health[name] = {
+                        "status": "crashed",
+                        "degraded": False,
+                        "error": f"Process killed \u2014 PID {self._processes.get(name, {}).get('pid', '?')}",
+                        "error_rate": 1.0,
+                        "latency_p95_ms": 0,
+                        "requests_total": 0,
+                        "cpu_percent": 0,
+                        "memory_mb": 0,
+                    }
+                elif name in self._degraded_services:
+                    # Service has a fault injected \u2014 check via REAL HTTP
+                    try:
+                        r = client.get(f"http://localhost:{port}/healthz")
+                        if r.status_code == 200:
+                            body = r.json()
+                            health[name] = {
+                                "status": body.get("status", "healthy"),
+                                "degraded": body.get("status") != "healthy",
+                                "error": body.get("error"),
+                                "error_rate": body.get("error_rate", 0.0),
+                                "latency_p95_ms": 0,
+                                "requests_total": 0,
+                                "cpu_percent": 0,
+                                "memory_mb": 0,
+                            }
+                        else:
+                            body = r.json() if r.headers.get("content-type","").startswith("application/json") else {}
+                            health[name] = {
+                                "status": "degraded",
+                                "degraded": True,
+                                "error": body.get("error", self._degraded_services[name]),
+                                "error_rate": body.get("error_rate", 0.8),
+                                "latency_p95_ms": 5000,
+                                "requests_total": 0,
+                                "cpu_percent": 95,
+                                "memory_mb": 450,
+                            }
+                    except (httpx.ConnectError, httpx.TimeoutException):
+                        health[name] = {
+                            "status": "crashed",
+                            "degraded": False,
+                            "error": "ConnectionRefused \u2014 process not running",
+                            "error_rate": 1.0,
+                            "latency_p95_ms": 0,
+                            "requests_total": 0,
+                            "cpu_percent": 0,
+                            "memory_mb": 0,
+                        }
+                else:
+                    try:
                         r = client.get(f"http://localhost:{port}/healthz")
                         status = "healthy" if r.status_code == 200 else "unhealthy"
                         health[name] = {
@@ -513,37 +1038,34 @@ class ServiceOrchestrator:
                             "cpu_percent": 0,
                             "memory_mb": 0,
                         }
-                except (httpx.ConnectError, httpx.TimeoutException):
-                    # HTTP failed — but is the process actually running?
-                    proc_entry = self._processes.get(name, {})
-                    proc = proc_entry.get("proc")
-                    process_alive = proc is not None and proc.poll() is None
+                    except (httpx.ConnectError, httpx.TimeoutException):
+                        # HTTP failed \u2014 is the process actually running?
+                        proc_entry = self._processes.get(name, {})
+                        proc = proc_entry.get("proc")
+                        process_alive = proc is not None and proc.poll() is None
 
-                    if process_alive:
-                        # Process is running but port not ready yet (startup lag)
-                        # Report as healthy — the restart succeeded, just slow to bind
-                        health[name] = {
-                            "status": "healthy",
-                            "degraded": False,
-                            "error": None,
-                            "error_rate": 0.0,
-                            "latency_p95_ms": 0,
-                            "requests_total": 0,
-                            "cpu_percent": 0,
-                            "memory_mb": 0,
-                        }
-                    else:
-                        # Process is truly dead
-                        health[name] = {
-                            "status": "crashed",
-                            "degraded": False,
-                            "error": "Connection refused — process dead",
-                            "error_rate": 1.0,
-                            "latency_p95_ms": 0,
-                            "requests_total": 0,
-                            "cpu_percent": 0,
-                            "memory_mb": 0,
-                        }
+                        if process_alive:
+                            health[name] = {
+                                "status": "healthy",
+                                "degraded": False,
+                                "error": None,
+                                "error_rate": 0.0,
+                                "latency_p95_ms": 0,
+                                "requests_total": 0,
+                                "cpu_percent": 0,
+                                "memory_mb": 0,
+                            }
+                        else:
+                            health[name] = {
+                                "status": "crashed",
+                                "degraded": False,
+                                "error": "Connection refused \u2014 process dead",
+                                "error_rate": 1.0,
+                                "latency_p95_ms": 0,
+                                "requests_total": 0,
+                                "cpu_percent": 0,
+                                "memory_mb": 0,
+                            }
 
         # ── Dynamic infrastructure health overlay ────────────────────
         # These catch faults that don't crash processes but degrade service:

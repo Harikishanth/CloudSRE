@@ -48,9 +48,9 @@ def main():
         model = None
         tokenizer = None
 
-    SYSTEM_PROMPT = """You are an expert SRE. Output ONLY the next command to run. No explanations.
-COMMANDS: status, restart_service <svc>, queue drain <N>, cat /var/log/<svc>/error.log
-SERVICES: payment, auth, worker, frontend, cache, notification"""
+    SYSTEM_PROMPT = """You are an expert Cloud SRE. Output ONLY the next command to run. No explanations.
+COMMANDS: status, restart_service <svc>, queue drain <N>, curl http://<svc>.<region>.internal/healthz, cat /var/log/<svc>/error.log
+REGIONS: us-east-1(payment,auth,billing,gateway,loadbalancer,config) eu-west-1(worker,scheduler,search,storage,metrics_collector) ap-south-1(frontend,cache,notification,email,dns)"""
 
     def generate_action(obs, history):
         """Generate next action from model (or fallback heuristic)."""

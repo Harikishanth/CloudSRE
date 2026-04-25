@@ -1,7 +1,7 @@
 """
 CloudSRE v2 — Base Microservice.
 
-Common base class for all 4 microservices. Provides:
+Common base class for all 16 microservices. Provides:
   - /healthz endpoint (real health check)
   - /metrics endpoint (real Prometheus-style metrics)
   - /logs endpoint (recent log lines)
@@ -9,8 +9,7 @@ Common base class for all 4 microservices. Provides:
   - Structured logging integration
   - Graceful shutdown handling
 
-Each service (payment, auth, worker, frontend) inherits from this and adds
-its own routes and business logic.
+Each service inherits from this and adds its own routes and business logic.
 
 Kube SRE Gym equivalent: Their services are pre-built Docker images.
 They can't add custom endpoints or modify service behavior. We can.
@@ -70,6 +69,10 @@ class BaseService:
         self._health_error = ""
         self._start_time = time.time()
 
+        # Active fault state — set via /fault_inject HTTP endpoint
+        self._active_fault: Optional[str] = None
+        self._fault_params: Dict[str, Any] = {}
+
         # Create FastAPI app with lifespan
         self.app = FastAPI(
             title=f"CloudSRE — {service_name}",
@@ -88,11 +91,9 @@ class BaseService:
         async def healthz():
             """Real health check endpoint.
 
-            The agent calls this via:
-                curl http://localhost:<port>/healthz
-
-            Returns actual service health — not a fake status string.
-            If the service is broken, this returns a REAL error.
+            Returns actual service health based on fault state.
+            When a fault is injected via /fault_inject, this endpoint
+            returns REAL HTTP error codes (503, 429, 507) — not flags.
             """
             uptime = round(time.time() - self._start_time, 1)
 
@@ -103,19 +104,72 @@ class BaseService:
                         "status": "unhealthy",
                         "service": self.service_name,
                         "error": self._health_error,
+                        "fault_type": self._active_fault,
                         "uptime_seconds": uptime,
                     },
                 )
 
-            status = "degraded" if self._is_degraded else "healthy"
+            if self._is_degraded:
+                # Degraded faults return specific HTTP codes
+                status_code = self._fault_status_code()
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "status": "degraded",
+                        "service": self.service_name,
+                        "error": self._health_error,
+                        "fault_type": self._active_fault,
+                        "uptime_seconds": uptime,
+                        "error_rate": self.metrics.error_rate,
+                    },
+                )
+
             return {
-                "status": status,
+                "status": "healthy",
                 "service": self.service_name,
                 "uptime_seconds": uptime,
                 "error_rate": self.metrics.error_rate,
                 "latency_p95_ms": self.metrics.latency.percentile(95),
                 "active_connections": int(self.metrics.active_connections.value),
             }
+
+        @self.app.post("/fault_inject")
+        async def fault_inject(request: Request):
+            """Real fault injection endpoint.
+
+            Called by the orchestrator to make this service ACTUALLY broken.
+            The service will start returning real HTTP errors from /healthz.
+            """
+            body = await request.json()
+            fault_type = body.get("fault_type", "generic")
+            params = body.get("params", {})
+            severity = params.get("severity", "degraded")
+
+            self._active_fault = fault_type
+            self._fault_params = params
+            self._health_error = params.get("error_message", f"Fault active: {fault_type}")
+
+            if severity == "critical":
+                self._is_healthy = False
+                self._is_degraded = False
+            else:
+                self._is_healthy = True
+                self._is_degraded = True
+
+            self.logger.error(f"FAULT INJECTED: {fault_type} — {self._health_error}")
+            return {"status": "fault_injected", "type": fault_type, "severity": severity}
+
+        @self.app.post("/fault_clear")
+        async def fault_clear(request: Request):
+            """Clear active fault — service recovers to healthy state."""
+            old_fault = self._active_fault
+            self._active_fault = None
+            self._fault_params = {}
+            self._is_healthy = True
+            self._is_degraded = False
+            self._health_error = ""
+            self.logger.info(f"FAULT CLEARED: {old_fault} — service restored")
+            return {"status": "cleared", "previous_fault": old_fault}
 
         @self.app.get("/metrics")
         async def metrics():
@@ -192,6 +246,24 @@ class BaseService:
 
     # ── Fault Injection Interface ────────────────────────────────────────
 
+    def _fault_status_code(self) -> int:
+        """Map active fault type to an HTTP status code.
+
+        This makes degraded faults return appropriate HTTP error codes:
+        - Rate limiting: 429 Too Many Requests
+        - Disk/storage full: 507 Insufficient Storage
+        - Config locked: 423 Locked
+        - Everything else: 503 Service Unavailable
+        """
+        fault = self._active_fault or ""
+        if fault in ("rate_limit_zero",):
+            return 429
+        elif fault in ("disk_full", "retention_full", "email_queue_overflow"):
+            return 507
+        elif fault in ("config_locked",):
+            return 423
+        return 503
+
     def set_unhealthy(self, error: str = "Service unavailable"):
         """Mark service as unhealthy. /healthz will return 503."""
         self._is_healthy = False
@@ -203,6 +275,8 @@ class BaseService:
         self._is_healthy = True
         self._is_degraded = False
         self._health_error = ""
+        self._active_fault = None
+        self._fault_params = {}
         self.logger.info("Service restored to healthy state")
 
     def set_degraded(self):
@@ -217,6 +291,8 @@ class BaseService:
         self._is_healthy = True
         self._is_degraded = False
         self._health_error = ""
+        self._active_fault = None
+        self._fault_params = {}
         self._start_time = time.time()
         self.metrics.reset()
         self.logger.reset()

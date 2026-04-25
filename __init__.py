@@ -14,16 +14,10 @@ Usage:
     tu = get_training_utils()
 """
 
-from .models import (
-    CloudSREAction,
-    CloudSREObservation,
-    CloudSREState,
-    ScenarioSpec,
-    CascadeRule,
-    IncidentStep,
-    AdversarialScenarioSpec,
-)
-from .client import CloudSREEnv
+# Lazy imports — DO NOT eagerly import models or client here.
+# Service worker subprocesses import cloud_sre_v2.services.xxx which
+# triggers this __init__.py. If we eagerly import client.py, it pulls
+# in openenv-core which may not be installed or may hang.
 
 __all__ = [
     "CloudSREAction",
@@ -35,6 +29,21 @@ __all__ = [
     "IncidentStep",
     "AdversarialScenarioSpec",
 ]
+
+
+def __getattr__(name):
+    """Lazy import to avoid triggering openenv chain in service workers."""
+    if name in ("CloudSREAction", "CloudSREObservation", "CloudSREState",
+                "ScenarioSpec", "CascadeRule", "IncidentStep", "AdversarialScenarioSpec"):
+        from .models import (
+            CloudSREAction, CloudSREObservation, CloudSREState,
+            ScenarioSpec, CascadeRule, IncidentStep, AdversarialScenarioSpec,
+        )
+        return locals()[name]
+    if name == "CloudSREEnv":
+        from .client import CloudSREEnv
+        return CloudSREEnv
+    raise AttributeError(f"module 'cloud_sre_v2' has no attribute {name!r}")
 
 
 def get_training_utils():

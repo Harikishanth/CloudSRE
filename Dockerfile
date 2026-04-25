@@ -56,8 +56,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Set PYTHONPATH so imports work correctly
 ENV PYTHONPATH="/app/env:$PYTHONPATH"
 
-# Create directories for service logs and data
-RUN mkdir -p /var/log/payment /var/log/auth /var/log/worker /var/log/frontend /var/log/cache /var/log/notification /data
+# Create directories for ALL 16 service logs and data
+RUN mkdir -p /var/log/payment /var/log/auth /var/log/worker /var/log/frontend \
+    /var/log/cache /var/log/notification /var/log/search /var/log/gateway \
+    /var/log/scheduler /var/log/storage /var/log/metrics_collector /var/log/email \
+    /var/log/billing /var/log/config /var/log/dns /var/log/loadbalancer /data
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

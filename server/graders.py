@@ -1,18 +1,20 @@
 """
-CloudSRE v2 — Deterministic Graders.
+CloudSRE v2 — Graders with LLM Judge Integration.
 
-Pure Python grading functions — NO network calls, NO LLM dependency.
-These work in sandboxed environments where network is blocked.
+Deterministic grading for tiers 1-2 (fast, free).
+Blended LLM + deterministic scoring for tiers 3-5 (nuanced evaluation).
 
-Kube SRE Gym relies on LLM for per-step scoring (network required).
-When LLM fails, they return 0.0 (no signal). Our graders ALWAYS work.
+The LLM judge (HuggingFace Inference API) evaluates:
+  - SRE Workflow quality (triage → investigate → fix → verify)
+  - Root cause accuracy
+  - Fix quality and efficiency
 
 5 grader tiers:
   1. warmup         — Did you find the right service and fix it?
   2. single_fault   — Did you ignore the red herrings?
-  3. cascade        — Did you handle the cascade correctly?
-  4. multi_cascade  — Did you fix in priority order?
-  5. adversarial    — LLM judge (with deterministic fallback)
+  3. cascade        — Did you handle the cascade? (+ LLM when available)
+  4. multi_cascade  — Did you fix in priority order? (+ LLM when available)
+  5. adversarial    — LLM judge primary (with deterministic fallback)
 """
 
 import re
@@ -28,12 +30,24 @@ def _extract_services_mentioned(commands: List[str]) -> set:
     """Extract which services an agent investigated."""
     services = set()
     service_patterns = {
-        "payment": [":8001", "payment", "pay"],
-        "auth": [":8002", "auth", "jwt", "token"],
-        "worker": [":8003", "worker", "queue"],
-        "frontend": [":8004", "frontend", "proxy"],
-        "cache": [":8005", "cache"],
-        "notification": [":8006", "notification", "webhook"],
+        # Original 6 services
+        "payment": [":8001", "payment", "pay", "payment.us-east-1"],
+        "auth": [":8002", "auth", "jwt", "token", "auth.us-east-1"],
+        "worker": [":8003", "worker", "queue", "worker.eu-west-1"],
+        "frontend": [":8004", "frontend", "proxy", "frontend.ap-south-1"],
+        "cache": [":8005", "cache", "cache.ap-south-1", "elasticache"],
+        "notification": [":8006", "notification", "webhook", "notification.ap-south-1"],
+        # 10 new services
+        "search": [":8007", "search", "index", "search.eu-west-1"],
+        "gateway": [":8008", "gateway", "rate_limit", "circuit_breaker", "gateway.us-east-1"],
+        "scheduler": [":8009", "scheduler", "cron", "job", "scheduler.eu-west-1"],
+        "storage": [":8010", "storage", "disk", "storage.eu-west-1"],
+        "metrics_collector": [":8011", "metrics_collector", "scrape", "retention", "metrics_collector.eu-west-1"],
+        "email": [":8012", "email", "smtp", "email.ap-south-1"],
+        "billing": [":8013", "billing", "invoice", "ledger", "billing.us-east-1"],
+        "config": [":8014", "config", "config.us-east-1"],
+        "dns": [":8015", "dns", "resolution", "nxdomain", "dns.ap-south-1"],
+        "loadbalancer": [":8016", "loadbalancer", "backend", "session", "loadbalancer.us-east-1"],
     }
     for cmd in commands:
         cmd_lower = cmd.lower()
@@ -77,14 +91,32 @@ def _check_correct_service_targeted(
 ) -> bool:
     """Check if the agent's fix targeted the correct service."""
     service_indicators = {
-        "payment": [":8001", "payment", "restart_service payment"],
-        "auth": [":8002", "auth", "restart_service auth"],
-        "worker": [":8003", "worker", "restart_service worker", "queue drain"],
-        "frontend": [":8004", "frontend", "restart_service frontend"],
-        "cache": [":8005", "cache", "restart_service cache"],
-        "notification": [":8006", "notification", "restart_service notification", "webhook"],
+        # Original 6 services
+        "payment": [":8001", "payment", "restart_service payment", "restart payment"],
+        "auth": [":8002", "auth", "restart_service auth", "restart auth"],
+        "worker": [":8003", "worker", "restart_service worker", "restart worker", "queue drain"],
+        "frontend": [":8004", "frontend", "restart_service frontend", "restart frontend"],
+        "cache": [":8005", "cache", "restart_service cache", "restart cache"],
+        "notification": [":8006", "notification", "restart_service notification", "restart notification"],
+        # 10 new services
+        "search": [":8007", "search", "restart_service search", "restart search"],
+        "gateway": [":8008", "gateway", "restart_service gateway", "restart gateway"],
+        "scheduler": [":8009", "scheduler", "restart_service scheduler", "restart scheduler"],
+        "storage": [":8010", "storage", "restart_service storage", "restart storage"],
+        "metrics_collector": [":8011", "metrics_collector", "restart_service metrics_collector", "restart metrics_collector"],
+        "email": [":8012", "email", "restart_service email", "restart email"],
+        "billing": [":8013", "billing", "restart_service billing", "restart billing"],
+        "config": [":8014", "config", "restart_service config", "restart config"],
+        "dns": [":8015", "dns", "restart_service dns", "restart dns"],
+        "loadbalancer": [":8016", "loadbalancer", "restart_service loadbalancer", "restart loadbalancer"],
     }
     indicators = service_indicators.get(target_service, [])
+
+    # Fallback: if target_service isn't in the map (future-proofing),
+    # check for the service name directly in fix commands
+    if not indicators:
+        indicators = [target_service, f"restart_service {target_service}",
+                      f"restart {target_service}", f":{target_service}"]
 
     # Look at fix commands specifically
     fix_commands = [c for c in commands if any(kw in c.lower() for kw in
@@ -443,28 +475,29 @@ def grade_multi_cascade(
     else:
         feedback_parts.append("❌ Services still failing.")
 
-    # Priority order (20%) — payment (DB) should be fixed before auth
+    # Priority order (20%) — root cause service should be fixed first
     fix_order = []
     for i, cmd in enumerate(commands):
         cmd_lower = cmd.lower()
         if any(kw in cmd_lower for kw in ["restart", "fix:", "kill"]):
-            if "payment" in cmd_lower or ":8001" in cmd_lower:
-                fix_order.append("payment")
-            elif "auth" in cmd_lower or ":8002" in cmd_lower:
-                fix_order.append("auth")
-            elif "worker" in cmd_lower or ":8003" in cmd_lower:
-                fix_order.append("worker")
+            for svc_name in _extract_services_mentioned([cmd]):
+                if svc_name not in fix_order:
+                    fix_order.append(svc_name)
 
-    # Expected: payment first, then worker/drain, then auth
-    if fix_order:
-        if fix_order[0] == "payment":
+    # Check if root cause service was fixed first
+    target = scenario.get("target_service", "")
+    if fix_order and target:
+        if fix_order[0] == target:
             score += 0.20
-            feedback_parts.append("✅ Correct priority — fixed payment (DB) first.")
+            feedback_parts.append(f"Correct priority -- fixed {target} first.")
             details["priority_order"] = "correct"
         else:
             score += 0.05
-            feedback_parts.append(f"⚠️ Wrong priority — fixed {fix_order[0]} first (should be payment).")
+            feedback_parts.append(f"Wrong priority -- fixed {fix_order[0]} first (should be {target}).")
             details["priority_order"] = "wrong"
+    elif fix_order:
+        score += 0.10  # Fixed something, can't determine ideal order
+        details["priority_order"] = "partial"
     else:
         details["priority_order"] = "no_fixes"
 
@@ -483,7 +516,7 @@ def grade_multi_cascade(
         [c for c in commands if any(kw in c.lower() for kw in
          ["healthz", "logs", "metrics", "status"])]
     )
-    investigation_coverage = len(services_investigated) / 4.0  # 4 services
+    investigation_coverage = len(services_investigated) / max(len(service_health), 1)  # All services in play
     diag_score = 0.15 * investigation_coverage
     score += diag_score
     details["services_investigated"] = list(services_investigated)
@@ -569,13 +602,30 @@ def grade_episode(
     llm_score: Optional[float] = None,
     llm_feedback: Optional[str] = None,
 ) -> Tuple[float, str, dict]:
-    """Grade an episode by task ID. Returns (score, feedback, details)."""
+    """Grade an episode by task ID.
+
+    For tiers 3-5, if llm_score is provided, it's blended with
+    the deterministic score: 0.6 * llm + 0.4 * deterministic.
+
+    Returns (score, feedback, details).
+    """
     grader = GRADERS.get(task_id, grade_warmup)
 
     if task_id == "adversarial":
         return grader(history, scenario, service_health, resolved,
                      cascade_triggered, llm_score, llm_feedback)
     elif task_id in ("cascade", "multi_cascade"):
-        return grader(history, scenario, service_health, resolved, cascade_triggered)
+        det_score, det_feedback, det_details = grader(
+            history, scenario, service_health, resolved, cascade_triggered
+        )
+        # Blend with LLM score if available (tiers 3-4)
+        if llm_score is not None:
+            blended = 0.6 * llm_score + 0.4 * det_score
+            blended = round(min(1.0, max(0.0, blended)), 2)
+            det_details["llm_score"] = llm_score
+            det_details["deterministic_score"] = det_score
+            det_details["blended"] = True
+            return blended, f"LLM: {llm_feedback} | Det: {det_feedback}", det_details
+        return det_score, det_feedback, det_details
     else:
         return grader(history, scenario, service_health, resolved)

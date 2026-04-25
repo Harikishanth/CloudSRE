@@ -31,7 +31,7 @@ from fastapi.responses import HTMLResponse
 
 
 # ── Stateful Environment Factory ─────────────────────────────────────────
-# CloudSRE manages REAL infrastructure: 6 service subprocesses, ports,
+# CloudSRE manages REAL infrastructure: 16 service subprocesses, ports,
 # SQLite databases, and message queues. These resources must persist across
 # the full episode lifecycle (reset → step → step → ... → done).
 #
@@ -198,12 +198,12 @@ async def landing_page():
         <div class="container">
             <div class="status">System Online & Ready</div>
             <h1>CloudSRE v2 Environment</h1>
-            <p>Welcome to the <b>CloudSRE v2</b> OpenEnv instance. This is a production-grade, 6-microservice environment with cascading failure patterns designed for training RL agents in Site Reliability Engineering.</p>
+            <p>Welcome to the <b>CloudSRE v2</b> OpenEnv instance. This is a production-grade, 16-microservice environment with cascading failure patterns designed for training RL agents in Site Reliability Engineering.</p>
             
             <div class="grid">
                 <div class="card">
-                    <h3>6 Microservices</h3>
-                    <p>Payment, Auth, Worker, Frontend, Cache, and Notification.</p>
+                    <h3>16 Microservices</h3>
+                    <p>Core and extended services: payment, auth, worker, frontend, cache, notification, search, gateway, scheduler, storage, metrics_collector, email, billing, config, dns, and loadbalancer.</p>
                 </div>
                 <div class="card">
                     <h3>5 Difficulty Tiers</h3>

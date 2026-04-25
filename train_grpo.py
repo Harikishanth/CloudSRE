@@ -79,7 +79,7 @@ def build_prompt(obs: dict, turn: int, max_turns: int) -> str:
         error = info.get("error", "")
         health_lines.append(f"  {svc}: {status}" + (f" ({error})" if error else ""))
 
-    return f"""You are an SRE agent. Diagnose and fix the incident.
+    return f"""You are a Cloud SRE agent. Diagnose and fix the production incident.
 
 ALERT: {alert}
 COMMAND OUTPUT: {cmd_output}
@@ -88,11 +88,17 @@ COMMAND OUTPUT: {cmd_output}
 SERVICE HEALTH:
 {chr(10).join(health_lines)}
 
+Regions:
+  us-east-1: payment, auth, billing, gateway, loadbalancer, config
+  eu-west-1: worker, scheduler, search, storage, metrics_collector
+  ap-south-1: frontend, cache, notification, email, dns
+
 Step {turn+1}/{max_turns}. Respond with ONLY a single command:
+- curl http://<svc>.<region>.internal/healthz
+- cat /var/log/<service>/error.log
 - restart_service <name>
 - queue drain <rate>
 - status
-- cat /var/log/<service>/error.log
 
 Command:"""
 

@@ -1,7 +1,7 @@
 spec_version: 1
 name: cloud_sre_v2
 version: 1.0.0
-description: "A cascading incident response environment where an AI agent debugs real microservices (payment, auth, worker, frontend) running as Python subprocesses. Features real HTTP calls, real SQLite database, real JWT auth, real message queues, and real cascading failures where fixing one service breaks another. 5 tasks across 5 difficulty tiers testing causal reasoning and multi-step SRE workflows."
+description: "A cascading incident response environment where an AI agent debugs 16 real microservices (payment, auth, worker, frontend, cache, notification, search, gateway, scheduler, storage, metrics_collector, email, billing, config, dns, loadbalancer) running as Python subprocesses. Features real HTTP calls, real SQLite database, real JWT auth, real message queues, and real cascading failures where fixing one service breaks another. 5 tasks across 5 difficulty tiers testing causal reasoning and multi-step SRE workflows."
 type: space
 runtime: fastapi
 app: server.app:app

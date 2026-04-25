@@ -33,6 +33,13 @@ except ImportError:
 from .constants import TASK_CONFIGS
 from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
 
+# LLM Judge — optional, only used when HF_TOKEN is set
+try:
+    from .llm_judge import LLMJudge
+    _llm_judge = LLMJudge() if os.environ.get("HF_TOKEN") else None
+except ImportError:
+    _llm_judge = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -296,6 +303,8 @@ class CloudSREEnvironment(Environment):
                 f"  ps aux                                  — List processes\n"
                 f"  status                                  — Service overview\n\n"
                 f"Services: payment(:8001) auth(:8002) worker(:8003) frontend(:8004) cache(:8005) notification(:8006)\n"
+                f"          search(:8007) gateway(:8008) scheduler(:8009) storage(:8010) metrics_collector(:8011) email(:8012)\n"
+                f"          billing(:8013) config(:8014) dns(:8015) loadbalancer(:8016)\n"
             ),
             service_health=service_health,
             step_number=0,
@@ -658,7 +667,11 @@ class CloudSREEnvironment(Environment):
         }
 
     def _save_transcript(self, resolved: bool):
-        """Save episode transcript to JSONL and update adaptive sampling."""
+        """Save episode transcript to JSONL and update adaptive sampling.
+
+        For tiers 3-5, if LLM Judge is available (HF_TOKEN set),
+        runs blended LLM + deterministic scoring.
+        """
         # Record outcome for adaptive weighted sampling (Theme #4)
         if self._current_scenario:
             self._performance_tracker.record(
@@ -671,6 +684,30 @@ class CloudSREEnvironment(Environment):
         rubrics = self._compute_rubrics()
         if rubrics["rubric_avg_steps"] < 2 or rubrics["rubric_unique_cmds"] <= 1:
             logger.warning(f"  ⚠️ POTENTIAL REWARD HACKING: {rubrics}")
+
+        # LLM Judge scoring (tiers 3-5 only, when HF_TOKEN available)
+        llm_score_val = None
+        llm_feedback_val = None
+        llm_details = {}
+        if (_llm_judge and self._current_task_id in
+                ("cascade", "multi_cascade", "adversarial")):
+            try:
+                service_health = self.orchestrator.check_health()
+                llm_score_val, llm_feedback_val, llm_details = (
+                    _llm_judge.score_episode_sync(
+                        self._history,
+                        {
+                            "target_service": self._current_scenario.target_service if self._current_scenario else "",
+                            "failure_type": self._current_scenario.failure_type if self._current_scenario else "",
+                            "alert_message": self._current_scenario.alert_message if self._current_scenario else "",
+                        },
+                        resolved,
+                        service_health,
+                    )
+                )
+                logger.info(f"  LLM Judge: score={llm_score_val:.2f} feedback={llm_feedback_val}")
+            except Exception as e:
+                logger.warning(f"  LLM Judge failed: {e}")
 
         try:
             transcript = {
@@ -688,6 +725,11 @@ class CloudSREEnvironment(Environment):
                 "history": self._history,
                 "rubrics": rubrics,
                 "adaptive_sampling": self._performance_tracker.get_stats(),
+                "llm_judge": {
+                    "score": llm_score_val,
+                    "feedback": llm_feedback_val,
+                    "details": llm_details,
+                } if llm_score_val is not None else None,
             }
             log_path = os.environ.get("EPISODE_LOG", "episode_transcripts.jsonl")
             with open(log_path, "a") as f:
