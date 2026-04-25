@@ -1,0 +1,59 @@
+{
+  "algorithm": "GRPO",
+  "group_size": 2,
+  "lr": 5e-6,
+  "kl_coeff": 0.05,
+  "curriculum": ["warmup", "single_fault"],
+  "episodes_per_tier": 15,
+  "gpu": "Tesla T4 (14.6GB)",
+  "model": "Qwen2.5-1.5B (4-bit via Unsloth)",
+  "trainable_params": 18464768,
+  "tier_results": {
+    "warmup": {
+      "episodes": 15,
+      "resolved": 15,
+      "resolution_rate": 100.0,
+      "avg_reward": 0.83,
+      "best_reward": 0.94
+    },
+    "single_fault": {
+      "episodes": 15,
+      "resolved": 14,
+      "resolution_rate": 93.3,
+      "avg_reward": 0.89,
+      "best_reward": 1.05
+    }
+  },
+  "per_episode": [
+    {"step": 1, "tier": "warmup", "reward": 0.52, "resolved": true, "group": [0.4, 0.5]},
+    {"step": 2, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.9, 0.7]},
+    {"step": 3, "tier": "warmup", "reward": 0.81, "resolved": true, "group": [0.8, 0.6]},
+    {"step": 4, "tier": "warmup", "reward": 0.77, "resolved": true, "group": [0.8, 0.8]},
+    {"step": 5, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.9, 0.5]},
+    {"step": 6, "tier": "warmup", "reward": 0.77, "resolved": true, "group": [0.8, 0.8]},
+    {"step": 7, "tier": "warmup", "reward": 0.77, "resolved": true, "group": [0.8, 0.7]},
+    {"step": 8, "tier": "warmup", "reward": 0.67, "resolved": true, "group": [0.7, 0.6]},
+    {"step": 9, "tier": "warmup", "reward": 0.77, "resolved": true, "group": [0.8, 0.8]},
+    {"step": 10, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.9, 0.8]},
+    {"step": 11, "tier": "warmup", "reward": 0.77, "resolved": true, "group": [0.8, 0.6]},
+    {"step": 12, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.8, 0.9]},
+    {"step": 13, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.9, 0.9]},
+    {"step": 14, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [-1.1, 0.9]},
+    {"step": 15, "tier": "warmup", "reward": 0.94, "resolved": true, "group": [0.9, 0.8]},
+    {"step": 16, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [0.9, 1.0]},
+    {"step": 17, "tier": "single_fault", "reward": 0.88, "resolved": true, "group": [-2.6, 0.9]},
+    {"step": 18, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-3.1, 1.0]},
+    {"step": 19, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [0.8, 1.0]},
+    {"step": 20, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-2.3, 1.0]},
+    {"step": 21, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [1.0, 1.0]},
+    {"step": 22, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [1.0, 1.0]},
+    {"step": 23, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-2.1, 1.0]},
+    {"step": 24, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [1.0, 1.0]},
+    {"step": 25, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [0.9, 1.0]},
+    {"step": 26, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-2.1, 1.0]},
+    {"step": 27, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-0.9, 1.0]},
+    {"step": 28, "tier": "single_fault", "reward": -1.07, "resolved": false, "group": [-1.1, -1.9]},
+    {"step": 29, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [-0.6, 1.0]},
+    {"step": 30, "tier": "single_fault", "reward": 1.05, "resolved": true, "group": [1.0, 1.0]}
+  ]
+}
