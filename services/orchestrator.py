@@ -40,6 +40,7 @@ import sys
 import time
 import random
 import asyncio
+import shutil
 import signal
 import subprocess
 import threading
@@ -785,18 +786,28 @@ class ServiceOrchestrator:
         junk_path = os.path.join(
             os.environ.get("DATA_DIR", "/data"), "_disk_full_junk.bin")
         try:
-            if sys.platform != "win32":
-                # Linux: fallocate creates a real file allocation instantly
-                subprocess.run(
+            if sys.platform == "win32":
+                with open(junk_path, "wb") as f:
+                    f.write(b"\x00" * (50 * 1024 * 1024))
+            elif shutil.which("fallocate"):
+                result = subprocess.run(
                     ["fallocate", "-l", "50M", junk_path],
                     timeout=5, capture_output=True)
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"fallocate rc={result.returncode} stderr="
+                        f"{result.stderr.decode('utf-8', 'ignore')[:120]}"
+                    )
             else:
-                # Windows: write 50MB of zeros
+                logger.warning(
+                    "disk_full inject: fallocate not on PATH, "
+                    "falling back to manual write")
                 with open(junk_path, "wb") as f:
                     f.write(b"\x00" * (50 * 1024 * 1024))
             self._write_service_log("storage", "error",
                 f"StorageService: disk allocation created at {junk_path} — physical disk consumed")
         except Exception as e:
+            logger.warning(f"_inject_disk_full failed: {e}")
             self._write_service_log("storage", "error", f"StorageService: disk fill failed: {e}")
         # Also set HTTP flag so healthz returns 507
         self._inject_fault_via_http("storage", "disk_full",
@@ -1040,7 +1051,6 @@ class ServiceOrchestrator:
         """Write a log entry to a service's log file on disk."""
         import json as _json
         log_dir = os.path.join(self.log_dir, service)
-        os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, f"{level}.log")
         entry = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1049,10 +1059,13 @@ class ServiceOrchestrator:
             "message": message,
         }
         try:
+            os.makedirs(log_dir, exist_ok=True)
             with open(log_file, "a") as f:
                 f.write(_json.dumps(entry) + "\n")
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning(
+                f"_write_service_log failed (service={service}, dir={log_dir}): {e}"
+            )
 
     # ── Cascade Injection ────────────────────────────────────────────────
 
