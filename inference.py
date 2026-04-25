@@ -1,5 +1,12 @@
 """
-CloudSRE v2 — Inference Script
+CloudSRE v2 — Rich Inference Script
+
+Produces detailed, publication-quality episode transcripts showing:
+  - Per-step phase labels (TRIAGE/INVESTIGATE/FIX/VERIFY)
+  - Command + truncated output
+  - Per-step reward with explanation
+  - Service health delta
+  - Episode-level score breakdown
 
 MANDATORY environment variables:
     HF_TOKEN       Your Hugging Face API key
@@ -17,7 +24,7 @@ import os
 import sys
 import time
 import textwrap
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from openai import OpenAI
 
@@ -64,7 +71,55 @@ SYSTEM_PROMPT = textwrap.dedent("""
 """).strip()
 
 
-# ── Logging (hackathon format) ───────────────────────────────────────────
+# ── Phase Classification ─────────────────────────────────────────────────
+
+def classify_phase(cmd: str) -> str:
+    """Classify a command into SRE workflow phase."""
+    cmd_lower = cmd.lower()
+    if any(k in cmd_lower for k in ["status", "healthz", "health"]):
+        return "TRIAGE"
+    elif any(k in cmd_lower for k in ["cat ", "log", "sqlite3", "metrics", "queue status"]):
+        return "INVESTIGATE"
+    elif any(k in cmd_lower for k in ["restart", "drain", "kill", "fix:", "scale"]):
+        return "FIX"
+    elif any(k in cmd_lower for k in ["verify", "curl"]) and cmd_lower.count("curl") == 1:
+        return "VERIFY"
+    return "DIAGNOSE"
+
+
+def reward_explanation(reward: float, cmd: str, phase: str) -> str:
+    """Generate human-readable explanation for reward signal."""
+    if reward >= 0.2:
+        return "correct fix applied"
+    elif reward >= 0.1:
+        return "useful investigation" if "INVESTIGATE" in phase else "good triage step"
+    elif reward >= 0.05:
+        return "relevant diagnostic"
+    elif reward >= 0:
+        return "neutral action"
+    elif reward >= -0.1:
+        return "inefficient — repeated or unnecessary"
+    else:
+        return "wrong approach — penalty"
+
+
+def health_delta(prev: Dict, curr: Dict) -> str:
+    """Show what changed in service health between steps."""
+    if not prev or not curr:
+        return ""
+    changes = []
+    for svc in curr:
+        prev_status = prev.get(svc, {}).get("status", "unknown")
+        curr_status = curr.get(svc, {}).get("status", "unknown")
+        if prev_status != curr_status:
+            emoji = "✅" if curr_status == "healthy" else "🔴"
+            changes.append(f"{emoji} {svc}: {prev_status}→{curr_status}")
+    if changes:
+        return " | ".join(changes)
+    return "no change"
+
+
+# ── Logging (hackathon format + rich transcript) ─────────────────────────
 
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
@@ -84,6 +139,67 @@ def log_end(task: str, success: bool, steps: int, score: float, rewards: List[fl
         f"[END] task={task} success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
+
+
+# ── Rich Transcript ─────────────────────────────────────────────────────
+
+def print_episode_header(task_id: str, scenario_id: str, alert: str):
+    """Print beautiful episode header."""
+    print(f"\n╔{'═'*68}╗", flush=True)
+    print(f"║  EPISODE  │  Tier: {task_id:<12s}  │  Model: {MODEL_NAME.split('/')[-1]:<20s}  ║", flush=True)
+    print(f"╠{'═'*68}╣", flush=True)
+    print(f"║  Scenario: {scenario_id[:56]:<56s}  ║", flush=True)
+    print(f"╠{'═'*68}╣", flush=True)
+    alert_line = alert[:64] if alert else "No alert"
+    print(f"║  ALERT: {alert_line:<60s}║", flush=True)
+    print(f"╠{'═'*68}╣", flush=True)
+
+
+def print_step_rich(step: int, phase: str, cmd: str, output: str,
+                    reward: float, explanation: str, health_change: str):
+    """Print one step with full context."""
+    phase_colors = {
+        "TRIAGE": "🔍", "INVESTIGATE": "🔬", "FIX": "🔧",
+        "VERIFY": "✅", "DIAGNOSE": "📋"
+    }
+    emoji = phase_colors.get(phase, "▶")
+
+    print(f"║                                                                    ║", flush=True)
+    print(f"║  Step {step:2d} [{phase:11s}] {emoji}                                       ║", flush=True)
+    print(f"║  ┌─ Command: {cmd[:54]:<54s}  ║", flush=True)
+
+    # Output preview (truncated)
+    out_preview = output.replace("\n", " ").strip()[:54] if output else "(no output)"
+    print(f"║  │  Output:  {out_preview:<54s}  ║", flush=True)
+
+    # Reward + explanation
+    sign = "+" if reward >= 0 else ""
+    print(f"║  │  Reward:  {sign}{reward:.3f} ({explanation:<40s})  ║", flush=True)
+
+    # Health delta
+    if health_change and health_change != "no change":
+        hc = health_change[:54]
+        print(f"║  └─ Health:  {hc:<54s}  ║", flush=True)
+    else:
+        print(f"║  └─ Health:  no change                                        ║", flush=True)
+
+
+def print_episode_footer(resolved: bool, steps: int, total_reward: float,
+                         rewards: List[float], max_steps: int):
+    """Print episode summary."""
+    print(f"║                                                                    ║", flush=True)
+    print(f"╠{'═'*68}╣", flush=True)
+    status = "✅ RESOLVED" if resolved else "❌ FAILED"
+    print(f"║  RESULT: {status} in {steps} steps (max: {max_steps})                    ║", flush=True)
+    print(f"║  TOTAL REWARD: {total_reward:+.3f}                                        ║", flush=True)
+
+    # Show reward per step
+    if rewards:
+        rw_str = " ".join(f"{r:+.2f}" for r in rewards[:12])
+        print(f"║  PER-STEP:  [{rw_str}]", flush=True)
+
+    print(f"╚{'═'*68}╝", flush=True)
+    print(flush=True)
 
 
 # ── LLM call ────────────────────────────────────────────────────────────
@@ -131,7 +247,7 @@ def get_model_response(
 # ── Run one task ─────────────────────────────────────────────────────────
 
 def run_task(env_client, llm_client, task_id: str):
-    """Run a single task episode with multi-step interaction."""
+    """Run a single task episode with multi-step interaction + rich transcript."""
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
     rewards = []
     success = False
@@ -142,6 +258,12 @@ def run_task(env_client, llm_client, task_id: str):
         result = env_client.reset(task_id=task_id)
         obs = result.observation
         history = []
+        prev_health = {}
+
+        # Rich header
+        scenario_id = getattr(obs, "scenario_id", "unknown")
+        alert = getattr(obs, "alert", "")
+        print_episode_header(task_id, scenario_id, alert)
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
@@ -154,17 +276,36 @@ def run_task(env_client, llm_client, task_id: str):
             command = get_model_response(llm_client, obs_text, history)
             history.append(command)
 
+            # Classify phase
+            phase = classify_phase(command)
+
             # Execute command
             result = env_client.step(CloudSREAction(command=command))
             obs = result.observation
             reward = result.reward or 0.0
             rewards.append(reward)
 
+            # Rich step output
+            cmd_output = getattr(obs, "command_output", "")
+            curr_health = getattr(obs, "service_health", {})
+            h_delta = health_delta(prev_health, curr_health)
+            explanation = reward_explanation(reward, command, phase)
+
+            print_step_rich(step, phase, command, cmd_output,
+                          reward, explanation, h_delta)
+
+            # Hackathon format
             log_step(step=step, action=command, reward=reward,
                     done=result.done, error=None)
 
+            prev_health = curr_health
+
         score = round(min(max(sum(rewards), 0.01), 0.99), 2) if rewards else 0.0
         success = score >= SUCCESS_SCORE_THRESHOLD
+
+        # Rich footer
+        resolved = getattr(obs, "done", False) if obs else False
+        print_episode_footer(success, len(rewards), sum(rewards), rewards, MAX_STEPS)
 
     except Exception as e:
         log_step(step=step + 1, action="ERROR", reward=0.0, done=True, error=str(e))
@@ -216,6 +357,13 @@ def main() -> None:
 
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "dummy")
 
+    print(f"\n{'='*70}")
+    print(f"  CloudSRE v2 — INFERENCE")
+    print(f"  Model:  {MODEL_NAME}")
+    print(f"  Env:    {ENV_URL}")
+    print(f"  Tasks:  {', '.join(tasks_to_run)}")
+    print(f"{'='*70}\n")
+
     max_env_retries = 10
     for attempt in range(max_env_retries):
         try:
@@ -237,3 +385,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+"""

@@ -34,6 +34,12 @@ import warnings
 import logging
 from collections import defaultdict
 
+try:
+    import wandb
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
+
 # ── Suppress noisy warnings ─────────────────────────────────────────────
 warnings.filterwarnings("ignore", message=".*max_new_tokens.*")
 warnings.filterwarnings("ignore", message=".*attention mask API.*")
@@ -221,9 +227,41 @@ def main():
     parser.add_argument("--output-dir", default="./cloudsre-grpo")
     parser.add_argument("--save-every", type=int, default=0,
                         help="Save checkpoint every N episodes (0=only at end)")
+    parser.add_argument("--wandb-project", default="CloudSRE-GRPO",
+                        help="WandB project name")
+    parser.add_argument("--wandb-run-name", default=None,
+                        help="WandB run name (auto-generated if not set)")
+    parser.add_argument("--no-wandb", action="store_true",
+                        help="Disable WandB logging")
     args = parser.parse_args()
 
     tiers = [t.strip() for t in args.curriculum.split(",")]
+
+    # ── WandB Init ──
+    use_wandb = HAS_WANDB and not args.no_wandb
+    if use_wandb:
+        run_name = args.wandb_run_name or f"grpo-{'_'.join(tiers)}-g{args.group_size}"
+        wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            config={
+                "algorithm": "GRPO",
+                "model_id": args.model_id,
+                "curriculum": tiers,
+                "episodes_per_tier": args.episodes_per_tier,
+                "group_size": args.group_size,
+                "max_turns": args.max_turns,
+                "learning_rate": args.lr,
+                "kl_coeff": args.kl_coeff,
+                "clip_eps": args.clip_eps,
+                "environment": "CloudSRE v2",
+                "services": 16,
+                "fault_types": 25,
+            },
+        )
+        print(f"WandB: logging to {args.wandb_project}/{run_name}")
+    else:
+        print("WandB: disabled (install wandb or use --no-wandb)")
 
     # ── Load Model ──
     from unsloth import FastLanguageModel
@@ -247,7 +285,8 @@ def main():
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
-    print(f"Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
+    n_params = sum(p.numel() for p in trainable_params)
+    print(f"Trainable parameters: {n_params:,}")
 
     # ── Environment ──
     env = CloudSREClient(args.env_url)
@@ -356,6 +395,7 @@ def main():
 
             avg_10 = sum(tier_rewards[-10:]) / len(tier_rewards[-10:])
             res_rate = sum(tier_resolutions) / len(tier_resolutions) * 100
+            group_variance = std_reward
 
             group_str = " | ".join([
                 f"{'✓' if r else '✗'}{rw:+.1f}" for rw, r in zip(group_rewards, group_resolved)
@@ -370,6 +410,30 @@ def main():
                 f"res={res_rate:4.0f}% | "
                 f"group=[{group_str}]"
             )
+
+            # ── WandB per-episode logging ──
+            if use_wandb:
+                wandb.log({
+                    # Core reward metrics
+                    f"reward/{tier}/best": best_reward,
+                    f"reward/{tier}/mean": mean_reward,
+                    f"reward/{tier}/rolling_avg_10": avg_10,
+                    f"reward/global_best": best_reward,
+                    f"reward/global_mean": mean_reward,
+                    # Resolution tracking
+                    f"resolution/{tier}/rate": res_rate,
+                    f"resolution/{tier}/resolved": int(any_resolved),
+                    # GRPO-specific
+                    f"grpo/{tier}/group_variance": group_variance,
+                    f"grpo/{tier}/advantage_spread": max(advantages) - min(advantages),
+                    f"grpo/{tier}/valid_rollouts": valid_rollouts,
+                    # Training dynamics
+                    f"training/loss": avg_loss.item() if valid_rollouts > 0 else 0,
+                    f"training/steps_in_best": len(best_cmds),
+                    # Progress
+                    "episode": global_step,
+                    "tier": tier_idx,
+                }, step=global_step)
 
             # Checkpoint saving
             if args.save_every > 0 and global_step % args.save_every == 0:
@@ -392,6 +456,15 @@ def main():
         print(f"  Resolution: {resolved_count}/{len(tier_rewards)} ({tier_results[tier]['resolution_rate']:.0f}%)")
         print(f"  Avg reward: {tier_results[tier]['avg_reward']:+.2f}")
         print(f"  Best reward: {tier_results[tier]['best_reward']:+.2f}")
+
+        # WandB tier summary
+        if use_wandb:
+            wandb.log({
+                f"tier_summary/{tier}/resolution_rate": tier_results[tier]['resolution_rate'],
+                f"tier_summary/{tier}/avg_reward": tier_results[tier]['avg_reward'],
+                f"tier_summary/{tier}/best_reward": tier_results[tier]['best_reward'],
+                f"tier_summary/{tier}/episodes": len(tier_rewards),
+            })
 
     # ── Save Final Model ──
     print(f"\nSaving final model to {args.output_dir}...")
@@ -497,6 +570,20 @@ def main():
             f"{res['best_reward']:+.2f}"
         )
     print(f"{'='*70}")
+
+    # ── WandB finish ──
+    if use_wandb:
+        # Log final summary table
+        summary_table = wandb.Table(
+            columns=["Tier", "Episodes", "Resolution %", "Avg Reward", "Best Reward"],
+            data=[
+                [t, r["episodes"], r["resolution_rate"], r["avg_reward"], r["best_reward"]]
+                for t, r in tier_results.items()
+            ]
+        )
+        wandb.log({"final_summary": summary_table})
+        wandb.finish()
+        print("WandB: run completed and synced")
 
     env.close()
 
