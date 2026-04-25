@@ -16,7 +16,7 @@ pinned: false
 
 # 🔥 CloudSRE v2 — Cascading Incident Response Environment
 
-**The first RL environment where services are real OS processes, failures cascade through shared infrastructure, and the fix can be worse than the fault.**
+**The first RL environment where 16 services run as real OS processes, failures cascade through shared infrastructure, and the fix can be worse than the fault.**
 
 ![Python](https://img.shields.io/badge/Python-3.10-blue?logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.10-EE4C2C?logo=pytorch)
@@ -28,7 +28,7 @@ pinned: false
 |----------|-------|
 | **Domain** | Site Reliability Engineering (SRE) — Incident Response |
 | **Tasks** | 5 tiers (warmup → adversarial), 21+ scenarios |
-| **Services** | 6 real OS processes with real TCP ports |
+| **Services** | **16 real OS processes** with real TCP ports |
 | **Reward** | Dense per-step + cascade bonus + efficiency scaling |
 | **Unique Feature** | **Cascading failures** — the fix triggers new faults |
 | **Training** | SFT → REINFORCE → GRPO curriculum |
@@ -43,9 +43,9 @@ We kill a process.
 
 | Feature | CloudSRE v2 | Typical OpenEnv Submission |
 |---|---|---|
-| Service lifecycle | **Real OS processes with PIDs** | Python dict updates |
+| Service lifecycle | **16 real OS processes with PIDs** | Python dict updates |
 | Fault injection | **`os.kill(pid, SIGTERM)`** | `state["service"] = "down"` |
-| Health checks | **Real TCP connections on real ports** | `return {"healthy": True}` |
+| Health checks | **Real TCP connections on 16 ports** | `return {"healthy": True}` |
 | Cascading failures | **Emergent from process interactions** | Pre-scripted if/else chains |
 | Database | **Real SQLite with real locks** | In-memory dict |
 | Message queue | **File-backed with backpressure** | Python list |
@@ -70,6 +70,8 @@ We kill a process.
 │   ├── Cascade Engine (real causal dependency chains)         │
 │   ├── Adaptive Sampling (self-improving curriculum)          │
 │   └── 5 Deterministic Graders                               │
+│                                                              │
+│   ── 16 REAL MICROSERVICES (each = separate OS process) ──   │
 │                                                              │
 │   ┌─────────┐ ┌──────┐ ┌────────┐ ┌──────────┐             │
 │   │ payment │ │ auth │ │ worker │ │ frontend │             │
