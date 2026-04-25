@@ -410,6 +410,12 @@ def main():
                 f"res={res_rate:4.0f}% | "
                 f"group=[{group_str}]"
             )
+            # Show what the best rollout actually did (the agent's "reasoning")
+            if best_cmds:
+                cmds_preview = " → ".join(best_cmds[:6])
+                if len(best_cmds) > 6:
+                    cmds_preview += f" → ...({len(best_cmds)} steps)"
+                print(f"       {'✅' if any_resolved else '❌'} best trace: {cmds_preview}")
 
             # ── WandB per-episode logging ──
             if use_wandb:
