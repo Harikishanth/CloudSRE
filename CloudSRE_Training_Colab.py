@@ -105,16 +105,33 @@ print("\n✅ Both logins successful!")
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL 4: CLONE THE REPO
 # 👥 BOTH FRIENDS RUN THIS — Colab Friend AND HF Friend
+# Auto-detects platform: works on Colab, HF Space, or local machine.
 # ═══════════════════════════════════════════════════════════════════════════════
 import os
-os.chdir("/content")
+
+# Auto-detect platform
+if os.path.exists("/content"):       # Google Colab
+    BASE_DIR = "/content"
+    PLATFORM = "Colab"
+elif os.path.exists("/home/user"):   # HuggingFace Space
+    BASE_DIR = "/home/user"
+    PLATFORM = "HF Space"
+else:                                 # Local / other
+    BASE_DIR = os.path.expanduser("~")
+    PLATFORM = "Local"
+
+REPO_DIR = os.path.join(BASE_DIR, "CloudSRE")
+print(f"Platform detected: {PLATFORM}")
+print(f"Working in: {BASE_DIR}")
+
+os.chdir(BASE_DIR)
 
 # Remove old copy if it exists
 !rm -rf CloudSRE
 
 # Clone fresh
 !git clone https://github.com/Harikishanth/CloudSRE.git
-os.chdir("/content/CloudSRE")
+os.chdir(REPO_DIR)
 print(f"\n✅ Repo cloned. Working directory: {os.getcwd()}")
 !ls -la train_grpo.py  # Verify the training script exists
 
@@ -225,7 +242,7 @@ print(f"  Environment:   {ENV_URL}")
 print(f"  WandB project: {WANDB_PROJECT}")
 print("=" * 70)
 
-!cd /content/CloudSRE && python train_grpo.py \
+!cd {REPO_DIR} && python train_grpo.py \
     --env-url "{ENV_URL}" \
     --model-id "{MODEL_ID}" \
     --curriculum "{CURRICULUM}" \
@@ -245,8 +262,11 @@ print("=" * 70)
 import json
 import matplotlib.pyplot as plt
 
+log_path = os.path.join(REPO_DIR, "grpo_training_log.json")
+graph_path = os.path.join(REPO_DIR, "grpo_reward_curve.png")
+
 try:
-    with open("/content/CloudSRE/grpo_training_log.json") as f:
+    with open(log_path) as f:
         log = json.load(f)
 
     rewards = [ep["reward"] for ep in log["per_episode"]]
@@ -286,9 +306,9 @@ try:
         ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
-    plt.savefig('/content/CloudSRE/grpo_reward_curve.png', dpi=150, bbox_inches='tight')
+    plt.savefig(graph_path, dpi=150, bbox_inches='tight')
     plt.show()
-    print("✅ Graph saved to grpo_reward_curve.png")
+    print(f"✅ Graph saved to {graph_path}")
 except FileNotFoundError:
     print("❌ Training log not found — did training complete?")
 
@@ -312,9 +332,10 @@ PUSH_REPO = "DarDrax/cloudsre-1.5B-leg1"    # ← 🟦 COLAB FRIEND pushes this
 
 from unsloth import FastLanguageModel
 
-print(f"Loading trained model from ./cloudsre-grpo ...")
+model_path = os.path.join(REPO_DIR, "cloudsre-grpo")
+print(f"Loading trained model from {model_path} ...")
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="/content/CloudSRE/cloudsre-grpo",
+    model_name=model_path,
     max_seq_length=2048,
     load_in_4bit=True,
 )
@@ -342,10 +363,12 @@ print("  3. Save it as 'grpo_reward_curve.png'")
 print("  4. Or use the local one we just saved!")
 print("=" * 60)
 
-# You can also download the locally generated graph:
-from google.colab import files
+# Download the graph (Colab only — on HF Space, just find it in the file browser)
 try:
-    files.download('/content/CloudSRE/grpo_reward_curve.png')
+    from google.colab import files
+    files.download(os.path.join(REPO_DIR, 'grpo_reward_curve.png'))
     print("✅ Downloaded graph to your computer!")
+except ImportError:
+    print(f"Not on Colab — find the graph at: {os.path.join(REPO_DIR, 'grpo_reward_curve.png')}")
 except:
     print("Graph file not found — run Cell 8 first")
