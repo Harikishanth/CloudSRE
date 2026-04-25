@@ -158,15 +158,34 @@ def generate_with_logprobs(model, tokenizer, prompt: str, max_new_tokens: int = 
     return generated_text, log_probs
 
 
+def classify_phase(cmd: str) -> str:
+    """Classify a command into SRE workflow phase."""
+    c = cmd.lower()
+    if any(k in c for k in ["status", "healthz"]):
+        return "TRIAGE"
+    elif any(k in c for k in ["cat ", "log", "sqlite3", "metrics", "queue status"]):
+        return "INVESTIGATE"
+    elif any(k in c for k in ["restart", "drain", "kill"]):
+        return "FIX"
+    return "DIAGNOSE"
+
+
 def run_episode(model, tokenizer, env, task_id, max_turns=10, temperature=0.8):
-    """Run a single episode, return (reward, log_probs, commands, resolved)."""
+    """Run a single episode, return (reward, log_probs, commands, resolved, metadata)."""
+    metadata = {"alert": "", "broken": [], "per_step_rewards": [], "scenario": ""}
     try:
         result = env.reset(task_id=task_id)
     except Exception as e:
-        return 0.0, [], [], False
+        return 0.0, [], [], False, metadata
 
     obs = result.get("observation", result)
     max_steps = min(max_turns, obs.get("max_steps", max_turns))
+
+    # Capture metadata for descriptive logging
+    metadata["alert"] = obs.get("alert", "")[:120]
+    metadata["scenario"] = obs.get("scenario_id", "")
+    health = obs.get("service_health", {})
+    metadata["broken"] = [n for n, h in health.items() if h.get("status") != "healthy"]
 
     episode_log_probs = []
     episode_rewards = []
@@ -199,11 +218,12 @@ def run_episode(model, tokenizer, env, task_id, max_turns=10, temperature=0.8):
         obs = result.get("observation", result)
         reward = float(result.get("reward", 0.0))
         episode_rewards.append(reward)
+        metadata["per_step_rewards"].append(reward)
 
     total_reward = sum(episode_rewards)
     resolved = result.get("done", False) and total_reward > 0
 
-    return total_reward, episode_log_probs, episode_commands, resolved
+    return total_reward, episode_log_probs, episode_commands, resolved, metadata
 
 
 # ── GRPO Training Loop ─────────────────────────────────────────────────
@@ -329,8 +349,9 @@ def main():
             # Higher temperature for diversity in group
             temperatures = [0.6 + 0.1 * i for i in range(args.group_size)]
 
+            group_metadata = []
             for g in range(args.group_size):
-                reward, lps, cmds, resolved = run_episode(
+                reward, lps, cmds, resolved, meta = run_episode(
                     model, tokenizer, env, tier,
                     max_turns=args.max_turns,
                     temperature=temperatures[g]
@@ -339,6 +360,7 @@ def main():
                 group_log_probs.append(lps)
                 group_commands.append(cmds)
                 group_resolved.append(resolved)
+                group_metadata.append(meta)
 
             # ── GRPO: Compute group-relative advantages ──
             mean_reward = sum(group_rewards) / len(group_rewards)
@@ -401,21 +423,34 @@ def main():
                 f"{'✓' if r else '✗'}{rw:+.1f}" for rw, r in zip(group_rewards, group_resolved)
             ])
 
-            print(
-                f"  Ep {ep:3d}/{args.episodes_per_tier} | "
-                f"best={best_reward:+.2f} | "
-                f"mean={mean_reward:+.2f} | "
-                f"{'RESOLVED' if any_resolved else 'FAILED':8s} | "
-                f"avg(10)={avg_10:+.2f} | "
-                f"res={res_rate:4.0f}% | "
-                f"group=[{group_str}]"
-            )
-            # Show what the best rollout actually did (the agent's "reasoning")
+            # ── Descriptive narrative output ──
+            best_meta = group_metadata[best_idx]
+            alert_short = best_meta.get("alert", "unknown incident")[:80]
+            broken = best_meta.get("broken", [])
+            broken_str = ", ".join(broken[:4]) if broken else "none detected"
+
+            print(f"\n  ┌─ Episode {ep}/{args.episodes_per_tier} {'━'*50}")
+            print(f"  │ 🔔 Alert: {alert_short}")
+            print(f"  │ 🔴 Broken: {broken_str}")
+
+            # Show step-by-step with phase labels
             if best_cmds:
-                cmds_preview = " → ".join(best_cmds[:6])
-                if len(best_cmds) > 6:
-                    cmds_preview += f" → ...({len(best_cmds)} steps)"
-                print(f"       {'✅' if any_resolved else '❌'} best trace: {cmds_preview}")
+                print(f"  │ 📋 Agent's approach ({len(best_cmds)} steps):")
+                step_rewards = best_meta.get("per_step_rewards", [])
+                for i, cmd in enumerate(best_cmds[:8]):
+                    phase = classify_phase(cmd)
+                    r = step_rewards[i] if i < len(step_rewards) else 0.0
+                    r_icon = "✓" if r > 0 else "·" if r == 0 else "✗"
+                    print(f"  │   {i+1}. [{phase:11s}] {cmd[:50]:<50s} {r_icon} {r:+.2f}")
+                if len(best_cmds) > 8:
+                    print(f"  │   ... +{len(best_cmds)-8} more steps")
+
+            # Verdict
+            if any_resolved:
+                print(f"  │ ✅ RESOLVED  reward={best_reward:+.2f}  avg(10)={avg_10:+.2f}  rate={res_rate:.0f}%")
+            else:
+                print(f"  │ ❌ FAILED    reward={best_reward:+.2f}  avg(10)={avg_10:+.2f}  rate={res_rate:.0f}%")
+            print(f"  └{'━'*65}")
 
             # ── WandB per-episode logging ──
             if use_wandb:
