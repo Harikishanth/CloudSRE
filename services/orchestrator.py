@@ -613,43 +613,96 @@ class ServiceOrchestrator:
         return f"Injected: {latency_ms}ms latency into {target}"
 
     def _inject_cache_invalidation(self, target: str, params: dict) -> str:
-        """Invalidate cache — triggers cold cache and potential thundering herd."""
-        # Mark cache as DEGRADED — cold cache = 100% miss rate = service degraded
+        """Invalidate cache — physically delete cache data files.
+
+        OS-LEVEL: Deletes all files in the cache data directory, then
+        SIGSTOP the cache process for 2s to simulate a cold restart.
+        """
+        # Physical: delete cache data files
+        cache_dir = os.path.join(self.data_dir, "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        for fname in os.listdir(cache_dir):
+            try:
+                os.remove(os.path.join(cache_dir, fname))
+            except OSError:
+                pass
+        # Physical: SIGSTOP cache process briefly to simulate cold restart
+        pid = self._processes.get("cache", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                threading.Timer(2.0, lambda: os.kill(pid, signal.SIGCONT)).start()
+            except ProcessLookupError:
+                pass
         self._inject_fault_via_http("cache", "cache_invalidation",
             "ElastiCache fully invalidated — 100% miss rate, thundering herd risk")
         self._write_service_log("cache", "error",
-            "CacheService: FULL INVALIDATION — all entries evicted")
+            "CacheService: FULL INVALIDATION — all entries evicted (files deleted)")
         self._write_service_log("cache", "error",
             "CacheService: Hit ratio dropped to 0.0% — cache is COLD")
         self._write_service_log("payment", "error",
             "PaymentService: cache miss rate 100% — falling through to database")
-        return "Injected: cache invalidation (cold cache)"
+        return "Injected: cache invalidation (files deleted + SIGSTOP cold restart)"
 
     def _inject_webhook_storm(self, target: str, params: dict) -> str:
-        """Trigger mass webhook retry — simulates Stripe-style retry storm."""
-        count = params.get("count", 300)
-        # Mark notification as DEGRADED — webhook storm overwhelms delivery
+        """Trigger mass webhook retry — sends REAL HTTP requests to overwhelm the service.
+
+        OS-LEVEL: Spawns threads that fire actual HTTP requests at the
+        notification service, creating real connection exhaustion.
+        """
+        count = params.get("count", 100)
+        port = self._processes.get("notification", {}).get("port", 8006)
+        # Physical: fire real HTTP requests in background threads
+        def _storm():
+            import httpx as _httpx
+            for _ in range(count):
+                try:
+                    _httpx.post(f"http://localhost:{port}/webhook",
+                               json={"event": "payment.retry", "attempt": _},
+                               timeout=1.0)
+                except Exception:
+                    pass
+        storm_thread = threading.Thread(target=_storm, daemon=True)
+        storm_thread.start()
         self._inject_fault_via_http("notification", "webhook_storm",
             f"Webhook storm ({count} retries) — delivery pipeline overwhelmed")
         self._write_service_log("notification", "error",
-            f"NotificationService: WEBHOOK STORM — {count} webhooks queued for retry")
+            f"NotificationService: WEBHOOK STORM — {count} real HTTP requests fired")
         self._write_service_log("notification", "error",
             f"NotificationService: Queue depth {count}/500 — delivery rate overwhelmed")
         self._write_service_log("payment", "error",
             "PaymentService: Inbound webhook callbacks spiking — 300 req/sec (normal: 10)")
-        return f"Injected: webhook storm ({count} retries)"
+        return f"Injected: webhook storm ({count} real HTTP requests)"
 
     def _inject_index_corruption(self, target: str, params: dict) -> str:
+        """Search index corruption — write corrupt data to index file on disk."""
+        index_file = os.path.join(self.data_dir, "search_index.dat")
+        try:
+            with open(index_file, "wb") as f:
+                f.write(os.urandom(1024))  # Physical corruption
+        except OSError:
+            pass
         self._inject_fault_via_http("search", "index_corruption",
             "Search index corrupted — queries returning empty or incorrect results")
-        self._write_service_log("search", "error", "SearchService: index corruption detected, checksum mismatch")
-        return "Injected: search index corruption"
+        self._write_service_log("search", "error",
+            f"SearchService: index corruption detected — {index_file} has invalid checksum")
+        return "Injected: search index corruption (physical file corruption)"
 
     def _inject_index_lag(self, target: str, params: dict) -> str:
+        """Search index lag — write 1000+ pending docs to a backlog file."""
+        backlog_file = os.path.join(self.data_dir, "search_backlog.json")
+        try:
+            import json as _json
+            backlog = [{"doc_id": i, "status": "pending"} for i in range(1200)]
+            with open(backlog_file, "w") as f:
+                _json.dump(backlog, f)
+        except OSError:
+            pass
         self._inject_fault_via_http("search", "index_lag",
             "Search index lagging by >1000 docs — stale query results")
-        self._write_service_log("search", "error", "SearchService: index lag critical — backlog >1000 documents")
-        return "Injected: search index lag"
+        self._write_service_log("search", "error",
+            f"SearchService: index lag critical — {backlog_file} has 1200 pending docs")
+        return "Injected: search index lag (1200 docs in physical backlog)"
 
     def _inject_rate_limit_zero(self, target: str, params: dict) -> str:
         """Rate limit zero — SIGSTOP the gateway process briefly to cause real connection drops.
@@ -772,16 +825,35 @@ class ServiceOrchestrator:
         return "Injected: storage data corruption (physical DB corruption + HTTP 503)"
 
     def _inject_scrape_failure(self, target: str, params: dict) -> str:
+        """Metrics scrape failure — SIGSTOP the metrics_collector process."""
+        pid = self._processes.get("metrics_collector", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("metrics_collector", "error",
+                    "MetricsCollector: process frozen (SIGSTOP) — scrapes halted")
+            except ProcessLookupError:
+                pass
         self._inject_fault_via_http("metrics_collector", "scrape_failure",
             "Metrics collector scrape failures — telemetry stale, alerting blind spots")
         self._write_service_log("metrics_collector", "error", "MetricsCollector: scrape failures on all targets")
-        return "Injected: metrics scrape failure"
+        return "Injected: metrics scrape failure (SIGSTOP)"
 
     def _inject_retention_full(self, target: str, params: dict) -> str:
+        """Metrics retention full — fill the metrics data directory with junk."""
+        metrics_dir = os.path.join(self.data_dir, "metrics")
+        os.makedirs(metrics_dir, exist_ok=True)
+        try:
+            junk_path = os.path.join(metrics_dir, "_retention_full.bin")
+            with open(junk_path, "wb") as f:
+                f.write(b"\x00" * (5 * 1024 * 1024))  # 5MB junk file
+        except OSError:
+            pass
         self._inject_fault_via_http("metrics_collector", "retention_full",
             "Metrics retention full — dropping new datapoints", severity="critical")
-        self._write_service_log("metrics_collector", "error", "MetricsCollector: retention store full, dropping ingestion")
-        return "Injected: metrics retention full"
+        self._write_service_log("metrics_collector", "error",
+            "MetricsCollector: retention store full (5MB junk file), dropping ingestion")
+        return "Injected: metrics retention full (physical disk fill)"
 
     def _inject_smtp_down(self, target: str, params: dict) -> str:
         """SMTP down — SIGSTOP the email process to physically stop delivery.
@@ -804,28 +876,72 @@ class ServiceOrchestrator:
         return "Injected: email SMTP down (SIGSTOP)"
 
     def _inject_email_queue_overflow(self, target: str, params: dict) -> str:
+        """Email queue overflow — write real backlog file to disk."""
+        queue_file = os.path.join(self.data_dir, "email_queue.json")
+        try:
+            import json as _json
+            backlog = [{"to": f"user{i}@example.com", "status": "queued"} for i in range(500)]
+            with open(queue_file, "w") as f:
+                _json.dump(backlog, f)
+        except OSError:
+            pass
         self._inject_fault_via_http("email", "email_queue_overflow",
             "Email queue overflow — messages dropped")
-        self._write_service_log("email", "error", "EmailService: queue overflow threshold exceeded, dropping messages")
-        return "Injected: email queue overflow"
+        self._write_service_log("email", "error",
+            f"EmailService: queue overflow — 500 messages in {queue_file}")
+        return "Injected: email queue overflow (500 msgs in physical backlog)"
 
     def _inject_billing_desync(self, target: str, params: dict) -> str:
+        """Billing desync — insert unreconciled charges into the real database."""
+        try:
+            for i in range(10):
+                self.database.execute(
+                    "INSERT INTO payments (amount, user_id, status, created_at) "
+                    "VALUES (?, ?, 'desync_unreconciled', datetime('now'))",
+                    (round(99.99 + i, 2), f"billing_ghost_{i}"),
+                )
+        except Exception:
+            pass
         self._inject_fault_via_http("billing", "billing_desync",
             "Billing desync — charges recorded but not reconciled")
-        self._write_service_log("billing", "error", "BillingService: ledger desync, pending charges not applied")
-        return "Injected: billing desync"
+        self._write_service_log("billing", "error",
+            "BillingService: ledger desync — 10 unreconciled charges in DB")
+        return "Injected: billing desync (10 ghost charges in DB)"
 
     def _inject_invoice_stuck(self, target: str, params: dict) -> str:
+        """Invoice stuck — SIGSTOP the billing process."""
+        pid = self._processes.get("billing", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("billing", "error",
+                    "BillingService: process frozen (SIGSTOP) — invoices stuck")
+            except ProcessLookupError:
+                pass
         self._inject_fault_via_http("billing", "invoice_stuck",
             "Invoice generation stuck — invoices not being produced")
         self._write_service_log("billing", "error", "BillingService: invoice generation scheduler stuck")
-        return "Injected: invoice generation stuck"
+        return "Injected: invoice generation stuck (SIGSTOP)"
 
     def _inject_config_poisoned(self, target: str, params: dict) -> str:
+        """Config poisoned — write dangerous values to real config file."""
+        config_file = os.path.join(self.data_dir, "config.json")
+        try:
+            import json as _json
+            poisoned = {
+                "rate_limit": 0, "queue_max": 5, "timeout_ms": 1,
+                "debug_mode": True, "auth_bypass": True,
+                "_poisoned": True, "_timestamp": time.time(),
+            }
+            with open(config_file, "w") as f:
+                _json.dump(poisoned, f)
+        except OSError:
+            pass
         self._inject_fault_via_http("config", "config_poisoned",
             "Config store poisoned — critical keys set to unsafe values")
-        self._write_service_log("config", "error", "ConfigService: poisoned config values detected (rate_limit=0, queue_max=5)")
-        return "Injected: config poisoned"
+        self._write_service_log("config", "error",
+            f"ConfigService: poisoned config written to {config_file} (rate_limit=0, auth_bypass=True)")
+        return "Injected: config poisoned (physical config file corrupted)"
 
     def _inject_config_locked(self, target: str, params: dict) -> str:
         """Config locked — SIGSTOP the config process to physically block reads.
@@ -869,22 +985,54 @@ class ServiceOrchestrator:
         return "Injected: DNS resolution failure (SIGSTOP)"
 
     def _inject_stale_entries(self, target: str, params: dict) -> str:
+        """DNS stale entries — write stale host mappings to a real DNS cache file."""
+        dns_cache = os.path.join(self.data_dir, "dns_cache.json")
+        try:
+            import json as _json
+            stale = {
+                "payment": "10.0.0.99",  # dead IP
+                "auth": "10.0.0.98",
+                "gateway": "192.168.0.1",  # wrong subnet
+                "_ttl": 0, "_stale": True,
+            }
+            with open(dns_cache, "w") as f:
+                _json.dump(stale, f)
+        except OSError:
+            pass
         self._inject_fault_via_http("dns", "stale_entries",
             "DNS stale entries — services routed to dead endpoints")
-        self._write_service_log("dns", "error", "DNSService: stale cache entries serving invalid hosts")
-        return "Injected: DNS stale entries"
+        self._write_service_log("dns", "error",
+            f"DNSService: stale cache at {dns_cache} — serving dead IPs")
+        return "Injected: DNS stale entries (physical cache file poisoned)"
 
     def _inject_all_backends_removed(self, target: str, params: dict) -> str:
+        """All backends removed — SIGSTOP the loadbalancer to physically drop traffic."""
+        pid = self._processes.get("loadbalancer", {}).get("pid")
+        if pid and sys.platform != "win32":
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self._write_service_log("loadbalancer", "error",
+                    "LoadBalancer: process frozen (SIGSTOP) — all backends offline")
+            except ProcessLookupError:
+                pass
         self._inject_fault_via_http("loadbalancer", "all_backends_removed",
             "Load balancer has no healthy backends — traffic returning 503", severity="critical")
         self._write_service_log("loadbalancer", "error", "LoadBalancer: all backends removed from active pool")
-        return "Injected: all backends removed"
+        return "Injected: all backends removed (SIGSTOP)"
 
     def _inject_session_corruption(self, target: str, params: dict) -> str:
+        """Session corruption — physically corrupt session rows in SQLite."""
+        try:
+            self.database.execute(
+                "UPDATE sessions SET token = 'CORRUPTED_' || token, is_valid = 0"
+            )
+        except Exception:
+            pass
         self._inject_fault_via_http("loadbalancer", "session_corruption",
             "Sticky-session corruption — users routed inconsistently")
-        self._write_service_log("loadbalancer", "error", "LoadBalancer: sticky session table corrupted")
-        return "Injected: load balancer session corruption"
+        self._write_service_log("loadbalancer", "error",
+            "LoadBalancer: sticky session table corrupted (DB rows modified)")
+        return "Injected: session corruption (physical DB row corruption)"
 
     # ── Log Writing ──────────────────────────────────────────────────────
 

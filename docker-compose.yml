@@ -1,0 +1,231 @@
+version: "3.9"
+# CloudSRE v2 — Distributed Microservice Architecture
+# 16 real containers, each with its own PID namespace, network stack, and filesystem.
+# This is NOT localhost subprocess spawning — each service is a real Docker container.
+#
+# Usage:
+#   docker-compose up -d          # Start all 16 services + orchestrator
+#   docker ps                     # See 17 running containers
+#   docker kill cloudsre-payment   # Real SIGKILL — port goes dead
+#   docker pause cloudsre-dns      # Real SIGSTOP — TCP timeouts cascade
+#
+# Architecture:
+#   172.20.0.2   orchestrator (API server, port 7860)
+#   172.20.0.10  payment       172.20.0.11  auth         172.20.0.12  worker
+#   172.20.0.13  frontend      172.20.0.14  cache        172.20.0.15  notification
+#   172.20.0.16  search        172.20.0.17  gateway      172.20.0.18  scheduler
+#   172.20.0.19  storage       172.20.0.20  metrics      172.20.0.21  email
+#   172.20.0.22  billing       172.20.0.23  config       172.20.0.24  dns
+#   172.20.0.25  loadbalancer
+
+x-service-defaults: &service-defaults
+  build:
+    context: .
+    dockerfile: Dockerfile.service
+  restart: unless-stopped
+  volumes:
+    - shared-data:/data
+    - shared-logs:/var/log
+  networks:
+    - sre-mesh
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8001}/healthz"]
+    interval: 10s
+    timeout: 3s
+    retries: 3
+
+services:
+  # ── Orchestrator (API Gateway) ─────────────────────────────
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cloudsre-orchestrator
+    ports:
+      - "7860:7860"
+    volumes:
+      - shared-data:/data
+      - shared-logs:/var/log
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CONTAINER_MODE=docker
+      - DATA_DIR=/data
+      - LOG_DIR=/var/log
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.2
+    depends_on:
+      - payment
+      - auth
+      - worker
+      - frontend
+      - cache
+      - notification
+      - search
+      - gateway
+      - scheduler
+      - storage
+      - metrics_collector
+      - email
+      - billing
+      - config
+      - dns
+      - loadbalancer
+
+  # ── us-east-1 Region ───────────────────────────────────────
+  payment:
+    <<: *service-defaults
+    container_name: cloudsre-payment
+    command: python -m cloud_sre_v2.services._service_worker --service payment --port 8001 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8001:8001"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.10
+
+  auth:
+    <<: *service-defaults
+    container_name: cloudsre-auth
+    command: python -m cloud_sre_v2.services._service_worker --service auth --port 8002 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8002:8002"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.11
+
+  billing:
+    <<: *service-defaults
+    container_name: cloudsre-billing
+    command: python -m cloud_sre_v2.services._service_worker --service billing --port 8013 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8013:8013"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.22
+
+  gateway:
+    <<: *service-defaults
+    container_name: cloudsre-gateway
+    command: python -m cloud_sre_v2.services._service_worker --service gateway --port 8008 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8008:8008"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.17
+
+  loadbalancer:
+    <<: *service-defaults
+    container_name: cloudsre-loadbalancer
+    command: python -m cloud_sre_v2.services._service_worker --service loadbalancer --port 8016 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8016:8016"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.25
+
+  config:
+    <<: *service-defaults
+    container_name: cloudsre-config
+    command: python -m cloud_sre_v2.services._service_worker --service config --port 8014 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8014:8014"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.23
+
+  # ── eu-west-1 Region ───────────────────────────────────────
+  worker:
+    <<: *service-defaults
+    container_name: cloudsre-worker
+    command: python -m cloud_sre_v2.services._service_worker --service worker --port 8003 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8003:8003"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.12
+
+  scheduler:
+    <<: *service-defaults
+    container_name: cloudsre-scheduler
+    command: python -m cloud_sre_v2.services._service_worker --service scheduler --port 8009 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8009:8009"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.18
+
+  search:
+    <<: *service-defaults
+    container_name: cloudsre-search
+    command: python -m cloud_sre_v2.services._service_worker --service search --port 8007 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8007:8007"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.16
+
+  storage:
+    <<: *service-defaults
+    container_name: cloudsre-storage
+    command: python -m cloud_sre_v2.services._service_worker --service storage --port 8010 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8010:8010"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.19
+
+  metrics_collector:
+    <<: *service-defaults
+    container_name: cloudsre-metrics
+    command: python -m cloud_sre_v2.services._service_worker --service metrics_collector --port 8011 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8011:8011"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.20
+
+  # ── ap-south-1 Region ──────────────────────────────────────
+  frontend:
+    <<: *service-defaults
+    container_name: cloudsre-frontend
+    command: python -m cloud_sre_v2.services._service_worker --service frontend --port 8004 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8004:8004"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.13
+
+  cache:
+    <<: *service-defaults
+    container_name: cloudsre-cache
+    command: python -m cloud_sre_v2.services._service_worker --service cache --port 8005 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8005:8005"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.14
+
+  notification:
+    <<: *service-defaults
+    container_name: cloudsre-notification
+    command: python -m cloud_sre_v2.services._service_worker --service notification --port 8006 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8006:8006"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.15
+
+  email:
+    <<: *service-defaults
+    container_name: cloudsre-email
+    command: python -m cloud_sre_v2.services._service_worker --service email --port 8012 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8012:8012"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.21
+
+  dns:
+    <<: *service-defaults
+    container_name: cloudsre-dns
+    command: python -m cloud_sre_v2.services._service_worker --service dns --port 8015 --db-path /data/app.db --queue-dir /data/queue --log-dir /var/log
+    ports: ["8015:8015"]
+    networks:
+      sre-mesh:
+        ipv4_address: 172.20.0.24
+
+networks:
+  sre-mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  shared-data:
+  shared-logs:
