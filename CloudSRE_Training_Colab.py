@@ -60,11 +60,14 @@ print("=" * 60)
 # ═══════════════════════════════════════════════════════════════════════════════
 print("Installing dependencies... this takes 3-4 minutes...")
 
+# Install PyTorch first (Colab has it, HF Spaces may not)
+!pip install torch torchvision 2>/dev/null
+
 # Install unsloth + all its dependencies
 !pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null
 !pip install unsloth_zoo 2>/dev/null
 !pip install trl peft accelerate bitsandbytes 2>/dev/null
-!pip install xformers 2>/dev/null
+!pip install xformers triton 2>/dev/null
 
 # Install training dependencies
 !pip install httpx wandb matplotlib 2>/dev/null
