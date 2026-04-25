@@ -61,7 +61,8 @@ print("=" * 60)
 print("Installing dependencies... this takes 3-4 minutes...")
 
 # Install PyTorch first (Colab has it, HF Spaces may not)
-!pip install torch torchvision 2>/dev/null
+# Pin versions to avoid conflicts with unsloth (needs torch<2.11)
+!pip install "torch>=2.4.0,<2.11.0" "torchvision>=0.19.0,<0.26.0" 2>/dev/null
 
 # Install unsloth + all its dependencies
 !pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null
