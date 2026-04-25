@@ -34,12 +34,24 @@ logger = logging.getLogger(__name__)
 
 # Port assignments for each service
 SERVICE_PORTS = {
+    # ── Core Services (original 6) ──
     "payment": 8001,
     "auth": 8002,
     "worker": 8003,
     "frontend": 8004,
     "cache": 8005,
     "notification": 8006,
+    # ── Extended Services (10 new) ──
+    "search": 8007,
+    "gateway": 8008,
+    "scheduler": 8009,
+    "storage": 8010,
+    "metrics_collector": 8011,
+    "email": 8012,
+    "billing": 8013,
+    "config": 8014,
+    "dns": 8015,
+    "loadbalancer": 8016,
 }
 
 

@@ -27,7 +27,11 @@ logging.basicConfig(level=logging.WARNING)
 
 def main():
     parser = argparse.ArgumentParser(description="Run a CloudSRE service as a standalone process")
-    parser.add_argument("--service", required=True, choices=["payment", "auth", "worker", "frontend", "cache", "notification"])
+    parser.add_argument("--service", required=True, choices=[
+        "payment", "auth", "worker", "frontend", "cache", "notification",
+        "search", "gateway", "scheduler", "storage", "metrics_collector",
+        "email", "billing", "config", "dns", "loadbalancer",
+    ])
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--db-path", required=True)
     parser.add_argument("--queue-dir", required=True)
@@ -45,7 +49,7 @@ def main():
 
     queue = MessageQueue(max_size=1000, queue_dir=args.queue_dir)
 
-    # Create the appropriate service
+    # Create the appropriate service — 16 real OS processes
     if args.service == "payment":
         from cloud_sre_v2.services.payment_service import PaymentService
         svc = PaymentService(db, queue, port=args.port, log_dir=args.log_dir)
@@ -64,6 +68,36 @@ def main():
     elif args.service == "notification":
         from cloud_sre_v2.services.notification_service import NotificationService
         svc = NotificationService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "search":
+        from cloud_sre_v2.services.search_service import SearchService
+        svc = SearchService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "gateway":
+        from cloud_sre_v2.services.gateway_service import GatewayService
+        svc = GatewayService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "scheduler":
+        from cloud_sre_v2.services.scheduler_service import SchedulerService
+        svc = SchedulerService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "storage":
+        from cloud_sre_v2.services.storage_service import StorageService
+        svc = StorageService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "metrics_collector":
+        from cloud_sre_v2.services.metrics_collector_service import MetricsCollectorService
+        svc = MetricsCollectorService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "email":
+        from cloud_sre_v2.services.email_service import EmailService
+        svc = EmailService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "billing":
+        from cloud_sre_v2.services.billing_service import BillingService
+        svc = BillingService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "config":
+        from cloud_sre_v2.services.config_service import ConfigService
+        svc = ConfigService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "dns":
+        from cloud_sre_v2.services.dns_service import DNSService
+        svc = DNSService(port=args.port, log_dir=args.log_dir)
+    elif args.service == "loadbalancer":
+        from cloud_sre_v2.services.loadbalancer_service import LoadBalancerService
+        svc = LoadBalancerService(port=args.port, log_dir=args.log_dir)
     else:
         print(f"Unknown service: {args.service}", file=sys.stderr)
         sys.exit(1)
