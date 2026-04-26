@@ -32,6 +32,45 @@ Within 15 episodes, it learned to trace dependency chains, identify root causes 
 
 ---
 
+## 🌐 System Architecture
+
+CloudSRE v2 simulates a high-scale global infrastructure distributed across three primary regions. 
+
+```mermaid
+graph TD
+    subgraph "AP-SOUTH-1 (Frontend Tier)"
+        FE[Frontend] --> DNS[DNS]
+        FE --> CA[Cache]
+        FE --> NO[Notification]
+        NO --> EM[Email]
+    end
+
+    subgraph "US-EAST-1 (Core Tier)"
+        GW[API Gateway] --> LB[Load Balancer]
+        LB --> AU[Auth]
+        LB --> PA[Payment]
+        LB --> BI[Billing]
+        LB --> CO[Config]
+    end
+
+    subgraph "EU-WEST-1 (Data & Processing)"
+        WO[Worker] --> SC[Scheduler]
+        WO --> SE[Search]
+        WO --> ST[Storage]
+        WO --> MC[Metrics Collector]
+    end
+
+    FE --> GW
+    GW --> WO
+    PA --> ST
+    BI --> AU
+```
+
+The environment consists of **16 real microservices** running as asynchronous subprocesses, communicating via HTTP and shared state (SQLite/RabbitMQ). This provides a rich, high-fidelity observation space for the SRE agent.
+
+---
+
+
 ## Act 1: The Cold Start
 
 Episode 1. The agent receives its first alert: *"CRITICAL: payment service returning 503. Queue depth: 847/1000."*
