@@ -1591,20 +1591,21 @@ _DEATH_SPIRALS = [
 
 
 def _adversarial_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
-    """Tier 5: Death Spiral scenarios.
+    """Tier 5: Death Spiral scenarios and LLM Adversarial Designer.
 
-    Multi-fault cascading failures with strict fix-order requirements.
-    The dependency graph in the orchestrator enforces that fixing
-    downstream services without fixing upstream ROOT CAUSE will
-    cause immediate re-degradation.
-
-    This makes the environment IMPOSSIBLE for zero-shot 70B models:
-    - They see 5 services failing and try to restart the obvious one
-    - The service re-degrades because its upstream is still broken
-    - Only GRPO-trained agents learn the dependency map
+    Multi-fault cascading failures with strict fix-order requirements,
+    or dynamically generated LLM scenarios targeting agent weaknesses.
     """
-    # 50% chance: Death Spiral, 50% chance: dynamic random
-    if random.random() < 0.5 and _DEATH_SPIRALS:
+    tracker = kwargs.get("performance_tracker")
+    episode_count = tracker.get_episode_count() if tracker else 0
+    
+    # Progressive difficulty: start at 2, max 5, increase every 3 episodes
+    difficulty = min(5, max(2, (episode_count // 3) + 2))
+    
+    hf_token = os.environ.get("HF_TOKEN")
+
+    # 50% chance: Death Spiral (if difficulty >= 4), 50% chance: LLM / dynamic
+    if random.random() < 0.5 and difficulty >= 4 and _DEATH_SPIRALS:
         spiral = random.choice(_DEATH_SPIRALS)
         fault_type, target = spiral["root_fault"]
 
@@ -1640,8 +1641,67 @@ def _adversarial_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
             ],
             task_id="adversarial",
         )
-    else:
-        return _generate_dynamic_scenario(orchestrator, difficulty_range=(0.6, 0.9))
+
+    # Use LLM Adversarial Designer
+    if hf_token:
+        try:
+            import os
+            import logging
+            # Import inline to avoid circular imports if any
+            try:
+                from server.adversarial_designer import AdversarialDesigner
+            except ImportError:
+                from cloud_sre_v2.server.adversarial_designer import AdversarialDesigner
+
+            designer = AdversarialDesigner(hf_token=hf_token)
+            if tracker:
+                designer.tracker = tracker
+                
+            raw_scenario = designer.design_scenario(difficulty=difficulty)
+            
+            fault_type = raw_scenario.get("failure_type", "latency_injection")
+            target = raw_scenario.get("target_service", "payment")
+            
+            # Validation to ensure the environment doesn't crash on hallucinated faults
+            if fault_type not in _FAULT_CATALOG:
+                fault_type = "process_crash"
+                
+            valid_targets = ["payment", "auth", "worker", "frontend", "cache", "notification", 
+                             "search", "gateway", "scheduler", "storage", "metrics_collector", 
+                             "email", "billing", "config", "dns", "loadbalancer"]
+            if target not in valid_targets:
+                target = "payment"
+                
+            catalog_entry = _FAULT_CATALOG[fault_type]
+            params = catalog_entry["gen_params"]() if "gen_params" in catalog_entry else {}
+            params["target"] = target
+            
+            misleading = {}
+            for hr in raw_scenario.get("red_herrings", []):
+                hr_svc = hr.get("service")
+                if hr_svc in valid_targets:
+                    misleading[hr_svc] = hr.get("message", "Misleading signal")
+            
+            return ScenarioSpec(
+                scenario_id=f"llm_adversarial_{random.randint(1000, 9999)}",
+                failure_type=fault_type,
+                target_service=target,
+                params=params,
+                difficulty=difficulty * 0.2,
+                alert_message=raw_scenario.get("alert_message", f"Alert on {target}"),
+                root_cause=raw_scenario.get("root_cause", f"{fault_type} on {target}"),
+                correct_fix_description=raw_scenario.get("correct_fix_description", "Fix service"),
+                misleading_signals=misleading,
+                cascade_rules=[],
+                expected_diagnostic_path=["systemctl status", f"cat /var/log/{target}/error.log"],
+                task_id="adversarial",
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Adversarial LLM failed: {e}. Falling back to dynamic.")
+
+    # Fallback to programmatic dynamic scenario
+    return _generate_dynamic_scenario(orchestrator, difficulty_range=(0.4 + (difficulty*0.1), 0.5 + (difficulty*0.1)))
 
 
 # ── Dynamic Scenario Generator ───────────────────────────────────────────

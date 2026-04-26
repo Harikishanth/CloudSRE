@@ -1,54 +1,38 @@
 # CloudSRE v2: Hackathon Demo Video Script
 
-**Target Length:** 3 Minutes
+**Target Length:** 1 Minute 45 Seconds (STRICTLY UNDER 2 MINS)
 **Format:** Screen recording with voiceover (use OBS, Loom, or Windows Game Bar `Win + Alt + R`).
 **Setup before recording:** 
-1. Have the Gradio dashboard open in your browser (`python dashboard.py`).
+1. Have the Gradio dashboard open in your browser (`python dashboard.py` or your HF Space).
 2. Have your `README.md` architecture diagram visible.
-3. Keep the WandB `cascade_resolution_rate.png` graph handy for the end.
+3. Keep the WandB `cascade_resolution_rate.png` graph handy.
 
 ---
 
-### Part 1: The Hook & Architecture (0:00 - 0:45)
+### Part 1: The Hook & Architecture (0:00 - 0:30)
 **[Visual: Show the GitHub README Architecture Diagram]**
 
 **Speaker:** 
-"Hi judges, this is CloudSRE v2. 
-Most RL environments for SREs are just text-based simulators. We wanted to build something real. We built a fully functional, 16-node microservice architecture running locally, where the agent has to execute *real* Linux commands—like `ps`, `kill`, `curl`, and `sqlite3`—to fix actual infrastructure outages."
-
-"To train it, we used a Dual-LLM architecture. We trained a Qwen 1.5B agent using GRPO across a 5-tier curriculum, while a massive 72B LLM acts as an 'Adversarial Dungeon Master', dynamically grading the agent and exploiting its weaknesses."
+"Hi judges. This is CloudSRE v2. 
+Most environments simulate a single service using fake HTTP responses. We built a 16-node microservice architecture where our agent executes real Linux commands like `curl` and `ps` against actual subprocesses. 
+To train it, we used GRPO on a 1.5B model, while a 72B Adversarial LLM dynamically generated novel failures to exploit its weaknesses."
 
 ---
 
-### Part 2: The Live Demo (0:45 - 2:00)
+### Part 2: The Live Demo (0:30 - 1:15)
 **[Visual: Switch to the Gradio Dashboard. Click 'Inject Single Fault']**
 
 **Speaker:** 
-"Let's look at the live environment in action. 
-I just injected a failure into the Payment service. In the background, real Linux processes are running."
-
-**[Visual: Point to the dashboard as the Payment box turns RED and the Agent Terminal starts scrolling]**
-
-**Speaker:**
-"Watch the agent's terminal. It isn't just guessing. It runs `systemctl status` to triage, uses `curl` to check the endpoints, and reads the logs to find the exact error. 
-It correctly identifies the issue and issues the exact commands to restart and verify the payment service."
-
-**[Visual: Wait for the dashboard boxes to turn back to GREEN]**
-
-**Speaker:**
-"And there it goes. The system is completely restored to green."
+"Here's the live environment. I've injected a failure into the Payment service. 
+Watch the agent's terminal. It isn't guessing. It uses `systemctl status` to triage, hits the endpoints with `curl`, and reads the actual error logs. 
+It correctly identifies the issue, issues the targeted restart, and verifies it. The system is restored to green."
 
 ---
 
-### Part 3: The Cascade Breakthrough (2:00 - 3:00)
+### Part 3: The Cascade Breakthrough (1:15 - 1:45)
 **[Visual: Switch to the WandB `cascade_resolution_rate.png` Graph]**
 
 **Speaker:** 
-"Once the agent mastered single faults, we moved it to the 'Cascade' difficulty. In a cascade, simply restarting a service causes a thundering herd that crashes the system again. It requires complex mitigation, like draining queues first."
-
-"We trained this entirely on Kaggle's free T4 GPUs. If you look at our WandB logs, right at Episode 14 of the Cascade tier, you can see the exact moment the agent has a breakthrough. It discovered how to mitigate the queue flooding before fixing the root cause, jumping from a 20% resolution rate to nearly 90%."
-
-**[Visual: Show the GitHub repo / HF Space]**
-
-**Speaker:**
-"Everything—from the environment to the training pipeline—is open source and available in our HuggingFace space. Thank you for your time."
+"But SRE is about cascading failures. When we moved to the Cascade tier, simply restarting services caused queue flooding. 
+We trained this entirely on a single free Kaggle T4 GPU. In our WandB logs, you can see the exact moment the agent had a breakthrough, learning to drain queues before restarting services.
+Our entire environment runs locally with zero configuration. Thank you."
