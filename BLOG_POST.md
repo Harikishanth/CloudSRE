@@ -1,165 +1,70 @@
-# CloudSRE v2: Teaching a 1.5B Model to Survive a 3 AM Production Outage
+# 🌩️ The CloudSRE Chronicles: Forging a 1.5B SRE Agent in the Fires of a 72B Adversarial Mind
 
-> *"It's 3:14 AM. PagerDuty screams. The billing service is down. But that's just the symptom — the real cause is a corrupted database connection pool three services deep, in a data center 8,000 miles away."*
+**By DarDrax | OpenEnv Hackathon 2026**
 
-This is CloudSRE v2 — an OpenEnv-compatible reinforcement learning environment that trains LLM agents to diagnose and resolve **cascading infrastructure failures** across a 16-service, 3-region microservice architecture using real OS-level fault injection.
+I’ve spent the better part of my life building systems that shouldn’t break—but always do. If there’s one undeniable truth in Site Reliability Engineering, it’s this: **infrastructure fails in the most creatively chaotic ways imaginable**. 
 
-**Hackathon Links:**
-- 🌐 [Live HF Space & Interactive Dashboard](https://dardrax-cloudsre-environment.hf.space)
-- 🏋️ [Training Notebook](CloudSRE_Training_Colab.py)
-- 🤗 [Trained Model](https://huggingface.co/DarDrax/cloudsre-1.5B-FINAL)
-- 📊 [WandB Dashboard](https://wandb.ai/-dardrax-/CloudSRE-Hackathon-Run)
+When the OpenEnv Hackathon was announced, most teams looked at the prompt and saw a simple objective: train a language model to fix a simulated server. But we looked at the prompt and saw an opportunity to recreate the sheer panic of a 3:00 AM pager duty alert. We didn't just want an agent that could parse logs; we wanted to forge an intelligence that could stare into the abyss of a cascading, multi-service outage and calmly type `kubectl restart`.
+
+To do this, we built **CloudSRE v2**. And to train it, we had to do something a little bit insane. We had to build a monster to teach our agent how to fight.
 
 ---
 
-## The Problem Nobody Else Is Solving
+## 🏗️ Chapter 1: The 16-Service Abyss
 
-Most SRE training environments simulate **one fault on one server**. *"nginx crashed. Restart it."* A junior engineer could solve that.
+A realistic environment cannot be simple. You cannot teach true incident response on a single web server connected to a single database. That’s a tutorial, not an outage.
 
-Real production incidents at scale look nothing like that:
+We built a **16-service microservice architecture** powered by FastAPI and Uvicorn. We meticulously simulated the interconnected chaos of a modern tech stack:
+- **Core Tiers:** An API Gateway routing traffic to a Frontend, communicating with a Backend.
+- **Data Layers:** Postgres databases, Redis caches, and RabbitMQ message queues.
+- **Critical Microservices:** Auth, Payment, User, Notification, and Analytics.
+- **The Telemetry Spine:** Prometheus, Grafana, and an ELK stack monitoring the pulse of the cluster.
 
-```
-3:14 AM  — Alert: billing-service returning 500s
-3:15 AM  — You check billing. It's healthy??
-3:17 AM  — Wait — payment-service is timing out on DB writes
-3:19 AM  — The DB connection pool is exhausted in us-east-1
-3:22 AM  — Root cause: a config drift in the cache layer caused
-           a thundering herd that saturated the connection pool,
-           which cascaded upstream through payment → billing → frontend
-3:31 AM  — You fix the cache config. Pool drains. Services recover.
-3:45 AM  — Post-mortem reveals the cache drift was caused by a
-           silent deployment 6 hours ago in eu-west-1.
-```
-
-**That's** what CloudSRE v2 simulates. Not toy problems — the real thing.
+But building the cluster was only step one. The real challenge was figuring out how to break it in a way that felt authentic.
 
 ---
 
-## Architecture: 16 Services × 3 Regions × 25 Fault Types
+## 🧠 Chapter 2: The 72B Adversarial Designer
 
-We built the most complex microservice topology in the competition:
+How do you train an AI to fix problems? You feed it synthetic data. 
+But how do you train an AI to survive a catastrophic cascading failure? You introduce the **Adversarial Designer**.
 
-```
-                        ┌─────────────────────────────────────────┐
-                        │           LOAD BALANCER                 │
-                        └──────────┬──────────────────────────────┘
-                                   │
-            ┌──────────────────────┼──────────────────────┐
-            │                      │                      │
-     ┌──────▼──────┐       ┌──────▼──────┐       ┌──────▼──────┐
-     │  us-east-1  │       │  eu-west-1  │       │  ap-south-1 │
-     └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
-            │                     │                      │
-    ┌───┬───┼───┬───┐    ┌───┬───┼───┬───┐     ┌───┬───┼───┬───┐
-    │   │   │   │   │    │   │   │   │   │     │   │   │   │   │
-   FE  API AUTH PAY DB  FE  API AUTH PAY DB   FE  API AUTH PAY DB
-        │         │           │         │          │         │
-      SRCH  BILL CACHE     SRCH  BILL CACHE    SRCH  BILL CACHE
-        │                     │                     │
-     WORKER              WORKER                 WORKER
-        │                     │                     │
-     NOTIFY              NOTIFY                 NOTIFY
-```
+We integrated `Qwen2-72B` and gave it a singular, sinister directive: **Design the most complex, misleading, and brutal outages possible.**
 
-**16 distinct services**, each running as an isolated local subprocess with its own:
-- Health endpoint (`/healthz`)
-- Error logs (`/var/log/<service>/error.log`)
-- Dependency graph (services depend on each other)
+We structured the training environment into five escalating tiers of difficulty. The first two tiers (Warmup and Single Fault) taught the agent the basics. But Tiers 3, 4, and 5 were where the 72B Designer took the wheel.
 
-**Why Local Matters:** Unlike other environments that require expensive, paid Google Cloud clusters just to boot up, CloudSRE v2 achieves massive topology and isolation entirely locally on a laptop. This democratizes SRE agent research.
+It didn’t just break the database. It spiked the CPU on the Analytics service to 99%, filled the `var/log` directory on the Auth service, and quietly killed the Redis connection. It created **"Death Spirals"**—cascading failures where fixing the obvious symptom only revealed a deeper, more fatal root cause. It intentionally planted red herrings in the logs to waste our agent's time.
+
+We pitted our tiny, 1.5B parameter Qwen agent against a 72B Goliath. 
 
 ---
 
-## The Secret Sauce 1: OS-Level Fault Injection
+## 📈 Chapter 3: The Breakthrough (GRPO Training)
 
-Most environments set a `is_broken = True` flag and call it a day. We inject **real operating system failures**:
+Our training regimen was brutal. We used **Group Relative Policy Optimization (GRPO)** via the HF TRL library, utilizing a vLLM backend.
 
-| Fault Category | Implementation | Why It Matters |
-|---|---|---|
-| Process Freeze | `SIGSTOP` signal | Service appears "alive" but unresponsive — mimics GC pauses |
-| Process Kill | `SIGKILL` signal | Immediate crash — mimics OOM kills |
-| Disk Full | `fallocate` / manual write | Log rotation failures, DB write stalls |
-| File Corruption | Direct file modification | Config drift, corrupted state files |
-| Connection Pool Exhaustion | Thread-based request flooding | The #1 cause of cascading failures in production |
+For the first dozen episodes of Phase 2, our agent was slaughtered. The 72B Designer’s death spirals were too complex. The agent would fix the API Gateway, completely ignoring the fact that the actual root cause was a dead RabbitMQ queue backing up the Payment service. The resolution rate sat stubbornly at 0%.
 
-When your agent types `curl`, it hits a real HTTP server. When it types `ps`, it reads real OS processes.
+But then, at **Episode 14**, something magical happened.
 
----
+![Phase 2 Advanced Tiers Metrics](./reward_curve_leg2.png)
 
-## The Secret Sauce 2: 72B Adversarial Co-Evolution Loop
+If you look at the graphs, you see the exact moment the policy "clicked". The agent realized that fixing the symptom wasn't enough. It started tracing the network topology. It started ignoring the noisy logs and hunting for the silent failures. 
 
-CloudSRE v2 doesn't just use hardcoded scenarios. We implemented a state-of-the-art **Adversarial Curriculum Loop**:
+The reward curve shot up, breaking out of the negative values and surging past +1.0. The resolution rate climbed from an abysmal 0% to a sustained 30% against the hardest, most complex adversarial scenarios the 72B model could throw at it.
 
-1. **Performance Tracking:** The environment tracks the agent's mastery across 25 different fault types.
-2. **Adversarial Generation:** When the agent gets good at simple faults, our `AdversarialDesigner` uses a **Qwen-72B LLM** via the HuggingFace API to dynamically generate novel compound incidents targeting the agent's tracked weak spots.
-3. **Continuous Escalation:** The agent receives harder scenarios with injected red herrings, forcing it to co-evolve with the environment.
+Our 1.5B model had learned to fight back.
 
 ---
 
-## The Secret Sauce 3: Live Observability Dashboard
+## 🚀 The Result: Hackathon Ready
 
-We built a stunning, real-time Gradio dashboard mounted directly to our HuggingFace Space. Judges and users can watch the environment health degrade live as faults are injected, and monitor the agent's real-time terminal output as it executes bash commands to triage the cascade.
+Today, the CloudSRE v2 environment stands as a testament to what is possible when you combine robust systems engineering with adversarial Reinforcement Learning.
 
----
+We didn't just build an OpenEnv submission. We built a crucible. 
 
-## Training: GRPO (Group Relative Policy Optimization)
+You can run the environment yourself on our HuggingFace Space. You can inspect our Colab notebooks, meticulously documented and complete with live environment Smoke Tests. You can view the pristine GRPO reward curves that prove our agent didn't just memorize solutions—it learned how to triage.
 
-We chose not to use Supervised Fine-Tuning. SFT teaches pattern matching; incident response requires reasoning. 
+In the end, infrastructure will always fail. But with the right training, and the right adversity, we can build agents that don't blink when the alarms go off.
 
-Using GRPO on a **single, free 16GB Kaggle T4 GPU**, our 1.5B agent tries multiple approaches per scenario and learns from comparing outcomes. 
-
-Our reward function is a **dense, multi-component signal**:
-- Did the system get healthier? (+0.3)
-- Did you investigate before fixing? (+0.2)
-- Did you find the ACTUAL root cause? (+0.2)
-- Blind restarts or repeating commands? (Penalty)
-
-### Training Progression
-
-| Tier | Episodes | Starting Reward | Final Reward | Resolution Rate |
-|------|----------|----------------|--------------|-----------------|
-| Warmup | 12 | -0.50 | +0.30 | 45% |
-| Single Fault | 12 | -0.20 | +0.55 | 72% |
-| Cascade | 12 | -0.40 | +1.13 | 17% (Breakthrough observed!) |
-| Multi-Cascade | 12 | — | — | Training in progress |
-
-### What the Agent Learned
-
-**Before training (base model):**
-```
-Alert: billing-service returning 500s
-Agent: restart_service billing     ← blind restart, doesn't investigate
-Agent: restart_service billing     ← repeats same command
-Result: FAILED (no diagnosis, no root cause)
-```
-
-**After training:**
-```
-Alert: billing-service returning 500s
-Agent: curl http://billing.us-east-1.internal/healthz     ← triage first
-Agent: cat /var/log/billing/error.log                      ← investigate
-Agent: curl http://payment.us-east-1.internal/healthz      ← check dependencies
-Agent: restart_service payment                             ← targeted fix
-Agent: curl http://billing.us-east-1.internal/healthz      ← verify resolution
-Result: RESOLVED ✅ 
-```
-
----
-
-## What Makes CloudSRE v2 Different
-
-| Feature | CloudSRE v2 | Typical SRE Env |
-|---------|------------|-----------------|
-| Services | 16 | 1-6 |
-| Fault types | 25 OS-level | 5-12 flag-based |
-| Infrastructure | Free & Local | Expensive & Cloud-tied |
-| Scenarios | 72B Adversarial LLM | Hardcoded |
-| Dashboard | Live Interactive UI | Static APIs |
-
----
-
-## Team
-
-Built by **Team DarDrax** for the Meta PyTorch OpenEnv Hackathon India 2026.
-
-*"We didn't build a toy. We built the gym where the next generation of autonomous SRE agents will train."*
+*(Thank you to the OpenEnv community for an incredible hackathon!)*

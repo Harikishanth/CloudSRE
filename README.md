@@ -224,6 +224,10 @@ We successfully trained our agent using a two-phase approach to conquer the curr
 1. **Colab (Warmup & Single Fault)**: The agent mastered the basics of system triage, achieving a 44% resolution rate on Tier 1 and successfully navigating red herrings in Tier 2.
 2. **Kaggle (Cascade Mastery)**: The agent transferred to our multi-cascade and adversarial tiers. After struggling initially with "Death Spirals", the agent experienced a breakthrough at Episode 14. The policy successfully updated, pushing the cascade resolution rate from 0% to 20% and generating massive positive rewards (+1.3 peak).
 
+![Supervised Fine-Tuning Loss](./sft_loss_curve.png)
+
+*(Step 0: Supervised Fine-Tuning. The 1.5B agent learns SRE tool syntax and the OpenEnv action space structure, dropping loss smoothly from 2.09 to 0.15.)*
+
 ![Phase 1 Reward Curve](./reward_curve.png)
 
 *(Phase 1: The agent learned the SRE syntax and managed to master the Single Fault tier with a clear policy breakthrough.)*
