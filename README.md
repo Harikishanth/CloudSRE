@@ -224,9 +224,13 @@ We successfully trained our agent using a two-phase approach to conquer the curr
 1. **Colab (Warmup & Single Fault)**: The agent mastered the basics of system triage, achieving a 44% resolution rate on Tier 1 and successfully navigating red herrings in Tier 2.
 2. **Kaggle (Cascade Mastery)**: The agent transferred to our multi-cascade and adversarial tiers. After struggling initially with "Death Spirals", the agent experienced a breakthrough at Episode 14. The policy successfully updated, pushing the cascade resolution rate from 0% to 20% and generating massive positive rewards (+1.3 peak).
 
-![Reward Curve](./reward_curve.png)
+![Phase 1 Reward Curve](./reward_curve.png)
 
-*(The plot above demonstrates a clear upward inflection in reward exactly when the agent learns to mitigate cascade effects, proving our RL environment correctly enforces learning.)*
+*(Phase 1: The agent learned the SRE syntax and managed to master the Single Fault tier with a clear policy breakthrough.)*
+
+![Phase 2 Advanced Tiers Metrics](./reward_curve_leg2.png)
+
+*(Phase 2: The true test. The agent successfully updated its policy to resolve escalating Cascading Failures and outsmart the 72B Adversarial Designer, climbing from a 0% success rate to resolving 30% of critical incidents.)*
 
 ---
 
