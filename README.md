@@ -323,8 +323,9 @@ docker run -p 7860:7860 cloudsre:latest
 | **Blog/Writeup** | [BLOG_POST.md](./BLOG_POST.md) |
 | **Training Notebook (Colab)** | [CloudSRE_Training_Colab.ipynb](./CloudSRE_Training_Colab.ipynb) |
 | **GitHub** | [Harikishanth/CloudSRE](https://github.com/Harikishanth/CloudSRE) |
+
+> **Note on Experimental Tracking:** Full Weights & Biases tracking was used for all primary training legs (Leg 1, 2, and 3). Experimental tracking is disabled by default in the provided demo notebook (`--no-wandb`) to ensure an error-free execution for judges without requiring private API keys.
 | **Judges Guide** | [JUDGES_START_HERE.md](./JUDGES_START_HERE.md) |
-| **Demo Video** | *(Link to be added)* |
 
 ---
 
