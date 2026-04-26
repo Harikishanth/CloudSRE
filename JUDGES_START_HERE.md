@@ -96,8 +96,8 @@ The adversarial tier uses a **Qwen-72B Adversarial Designer** ([`server/adversar
 | 25 fault types + scenarios | [`server/constants.py`](server/constants.py) |
 | Command executor (real shell ops) | [`server/command_executor.py`](server/command_executor.py) |
 | Graders (check real health) | [`server/graders.py`](server/graders.py) |
-| GRPO training with curriculum | [`train_grpo.py`](train_grpo.py) |
-| SFT warmup training | [`sft_warmup.py`](sft_warmup.py) |
+| GRPO training with curriculum | [`training_scripts/train_grpo.py`](training_scripts/train_grpo.py) |
+| SFT warmup training | [`training_scripts/sft_warmup.py`](training_scripts/sft_warmup.py) |
 | Adversarial Designer (72B) | [`server/adversarial_designer.py`](server/adversarial_designer.py) |
 | LLM Judge (72B) | [`server/llm_judge.py`](server/llm_judge.py) |
 | OpenEnv spec | [`openenv.yaml`](openenv.yaml) |
