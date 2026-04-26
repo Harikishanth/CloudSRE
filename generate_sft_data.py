@@ -9,21 +9,31 @@ import httpx, json, time
 BASE = "https://dardrax-cloudsre-environment.hf.space"
 client = httpx.Client(base_url=BASE, timeout=120)
 
-PORT_MAP = {"payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004, "cache": 8005, "notification": 8006}
+PORT_MAP = {
+    "payment": 8001, "auth": 8002, "worker": 8003, "frontend": 8004,
+    "cache": 8005, "notification": 8006, "search": 8007, "gateway": 8008,
+    "scheduler": 8009, "storage": 8010, "metrics_collector": 8011,
+    "email": 8012, "billing": 8013, "config": 8014, "dns": 8015,
+    "loadbalancer": 8016,
+}
 
 SYSTEM_PROMPT = """You are an expert Site Reliability Engineer (SRE) managing a production cloud platform.
 
 AVAILABLE COMMANDS:
-  status                    - Check all service health
-  curl http://localhost:<PORT>/healthz  - Check specific service health
-  cat /var/log/<service>/error.log      - Read service error logs
-  restart_service <service>            - Restart a crashed/degraded service
-  queue drain <N>                      - Drain N messages from the queue
-  sqlite3 /data/db/main.db "<SQL>"     - Query the database
+  status                                       - Check all service health
+  curl http://localhost:<PORT>/healthz          - Check specific service health
+  curl http://<svc>.<region>.internal/healthz   - Check via cloud DNS
+  cat /var/log/<service>/error.log              - Read service error logs
+  restart_service <service>                     - Restart a crashed/degraded service
+  queue drain <N>                               - Drain N messages from the queue
+  sqlite3 /data/app.db "<SQL>"                  - Query the database
 
-SERVICES: payment(8001), auth(8002), worker(8003), frontend(8004), cache(8005), notification(8006)
+SERVICES (16 total):
+  us-east-1: payment(8001), auth(8002), gateway(8008), billing(8013), config(8014), loadbalancer(8016)
+  eu-west-1: worker(8003), search(8007), scheduler(8009), storage(8010), metrics_collector(8011)
+  ap-south-1: frontend(8004), cache(8005), notification(8006), email(8012), dns(8015)
 
-SRE WORKFLOW: triage (status) -> investigate (logs) -> fix (restart/drain) -> verify (status)
+SRE WORKFLOW: triage (status) -> investigate (logs/healthz) -> fix (restart/drain/config) -> verify (status)
 Output ONLY the next command. No explanations."""
 
 

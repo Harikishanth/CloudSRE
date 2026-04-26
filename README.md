@@ -218,6 +218,16 @@ python train_grpo.py \
 
 ---
 
+## Training Results & WandB Logs
+
+We successfully trained our agent using a two-phase approach to conquer the curriculum:
+1. **Colab (Warmup & Single Fault)**: The agent mastered the basics of system triage, achieving a 44% resolution rate on Tier 1 and successfully navigating red herrings in Tier 2.
+2. **Kaggle (Cascade Mastery)**: The agent transferred to our multi-cascade and adversarial tiers. After struggling initially with "Death Spirals", the agent experienced a breakthrough at Episode 14. The policy successfully updated, pushing the cascade resolution rate from 0% to 20% and generating massive positive rewards (+1.3 peak).
+
+*(WandB Training plots are provided in our submission artifacts. They demonstrate stable `valid_rollouts` without mode collapse, and a clear upward inflection in `rolling_avg_10` reward exactly when the agent learns to mitigate cascade effects.)*
+
+---
+
 ## Rich Inference Transcripts
 
 Each episode produces publication-quality output:
@@ -299,9 +309,11 @@ docker run -p 7860:7860 cloudsre:latest
 | Deliverable | Link |
 |-------------|------|
 | **HF Space (Environment)** | [DarDrax/CloudSRE-Environment](https://huggingface.co/spaces/DarDrax/CloudSRE-Environment) |
+| **Blog/Writeup** | [Blog.md](./Blog.md) |
 | **GitHub** | [Harikishanth/CloudSRE](https://github.com/Harikishanth/CloudSRE) |
-| **Training Notebook** | [Colab](./CloudSRE_Training.ipynb) |
+| **Training Notebooks & Scripts** | Included in Repo (`train_grpo.py`, Kaggle/Colab Notebooks) |
 | **Judges Guide** | [JUDGES_START_HERE.md](./JUDGES_START_HERE.md) |
+| **Demo Video** | *(Link to be added)* |
 
 ---
 

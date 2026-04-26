@@ -164,24 +164,36 @@ def print_step_rich(step: int, phase: str, cmd: str, output: str,
     }
     emoji = phase_colors.get(phase, "▶")
 
-    print(f"║                                                                    ║", flush=True)
-    print(f"║  Step {step:2d} [{phase:11s}] {emoji}                                       ║", flush=True)
-    print(f"║  ┌─ Command: {cmd[:54]:<54s}  ║", flush=True)
-
-    # Output preview (truncated)
-    out_preview = output.replace("\n", " ").strip()[:54] if output else "(no output)"
-    print(f"║  │  Output:  {out_preview:<54s}  ║", flush=True)
+    print(f"\n{'='*72}", flush=True)
+    print(f" Step {step:2d} | [{phase:11s}] {emoji} ", flush=True)
+    print(f"{'-'*72}", flush=True)
+    
+    # Full command
+    print(f"  $ {cmd.strip()}", flush=True)
+    print(f"", flush=True)
+    
+    # Full output (indented to look like terminal output)
+    if output:
+        out_lines = output.strip().split('\n')
+        # Cap to 15 lines max so it doesn't flood entirely, but much better than 54 chars
+        if len(out_lines) > 15:
+            out_lines = out_lines[:15] + ["  ... (output truncated) ..."]
+        for line in out_lines:
+            print(f"    {line}", flush=True)
+    else:
+        print(f"    (no output)", flush=True)
+    print(f"", flush=True)
 
     # Reward + explanation
     sign = "+" if reward >= 0 else ""
-    print(f"║  │  Reward:  {sign}{reward:.3f} ({explanation:<40s})  ║", flush=True)
+    print(f"  Reward: {sign}{reward:.3f} ({explanation})", flush=True)
 
     # Health delta
     if health_change and health_change != "no change":
-        hc = health_change[:54]
-        print(f"║  └─ Health:  {hc:<54s}  ║", flush=True)
+        print(f"  Health: {health_change}", flush=True)
     else:
-        print(f"║  └─ Health:  no change                                        ║", flush=True)
+        print(f"  Health: no change", flush=True)
+    print(f"{'='*72}\n", flush=True)
 
 
 def print_episode_footer(resolved: bool, steps: int, total_reward: float,
