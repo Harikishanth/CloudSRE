@@ -93,7 +93,7 @@ We kill a process.
 
 ---
 
-## Architecture
+## Architecture: The "72B Dungeon Master"
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -102,8 +102,8 @@ We kill a process.
 │  ┌──────────┐    ┌────────────────┐    ┌──────────┐    ┌───────────┐   │
 │  │Adversarial│──►│ 16 Real OS     │──►│  Agent   │──►│ LLM Judge │   │
 │  │ Designer  │   │ Processes      │   │(Qwen 1.5B│   │(Qwen 72B) │   │
-│  └─────▲─────┘   │ + SQLite +     │   │ + LoRA)  │   └─────┬─────┘   │
-│        │         │ Queue + Files  │   └────┬─────┘         │          │
+│  │(Qwen 72B) │   │ + SQLite +     │   │ + LoRA)  │   └─────┬─────┘   │
+│  └─────▲─────┘   │ Queue + Files  │   └────┬─────┘         │          │
 │        │         └────────────────┘        │               │          │
 │        │                                   │    reward     │          │
 │   ┌────┴────────────┐                      │               │          │
@@ -114,6 +114,10 @@ We kill a process.
 │   └──────────────────┘                                                │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+Most environments use simple flags and deterministic scoring. We built a **dual-LLM architecture** that mirrors Meta's internal "Kube-SRE-Gym":
+1. **The Adversarial "Dungeon Master" (`adversarial_designer.py`)**: In Tier 5, we use Qwen2.5-72B via the HF API to track the 1.5B agent's historical weaknesses and dynamically generate tailored incidents with intelligent red herrings.
+2. **The Senior SRE Judge (`llm_judge.py`)**: In Tiers 3-5 (cascades), deterministic grading fails. We use Qwen2.5-72B to read the agent's bash commands and grade its workflow (triage → investigate → fix → verify), root cause accuracy, and blast radius.
 
 ### Docker Compose (Distributed)
 ```
