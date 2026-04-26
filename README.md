@@ -249,7 +249,7 @@ SFT (syntax)  →  GRPO (5-tier curriculum with WandB)  →  EVALUATE (final exa
 python train_grpo.py \
     --env-url https://dardrax-cloudsre-environment.hf.space \
     --model-id unsloth/qwen2.5-1.5b-instruct-unsloth-bnb-4bit \
-    --curriculum warmup,single_fault,cascade \
+    --curriculum warmup,single_fault,cascade,multi_cascade,adversarial \
     --episodes-per-tier 30 \
     --group-size 4 \
     --wandb-project CloudSRE-GRPO
