@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, "D:/Meta")
 
-from cloud_sre_v2.server.constants import _generate_dynamic_scenario, TASK_CONFIGS
+from server.constants import _generate_dynamic_scenario, TASK_CONFIGS
 
 # Mock orchestrator (generator doesn't call orchestrator methods)
 class MockOrch:

@@ -9,7 +9,7 @@ os.makedirs("D:/Meta/cloud_sre_v2/_test_data/queue", exist_ok=True)
 os.makedirs("D:/Meta/cloud_sre_v2/_test_log", exist_ok=True)
 
 # Exact same as smoke test
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 orch = ServiceOrchestrator(
     db_path="D:/Meta/cloud_sre_v2/_test_data/test.db",
     log_dir="D:/Meta/cloud_sre_v2/_test_log",

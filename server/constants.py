@@ -16,7 +16,7 @@ Scenario count: 26 warmup + 4 single_fault + 17 cascade + 4 multi_cascade
 
 import random
 from dataclasses import field
-from cloud_sre_v2.models import ScenarioSpec, CascadeRule
+from models import ScenarioSpec, CascadeRule
 
 
 def _adaptive_choice(scenarios: list, **kwargs) -> "ScenarioSpec":
@@ -1651,7 +1651,7 @@ def _adversarial_scenarios(orchestrator, **kwargs) -> ScenarioSpec:
             try:
                 from server.adversarial_designer import AdversarialDesigner
             except ImportError:
-                from cloud_sre_v2.server.adversarial_designer import AdversarialDesigner
+                from server.adversarial_designer import AdversarialDesigner
 
             designer = AdversarialDesigner(hf_token=hf_token)
             if tracker:

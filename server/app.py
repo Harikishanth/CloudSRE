@@ -24,8 +24,8 @@ try:
     from models import CloudSREAction, CloudSREObservation
     from server.cloud_sre_environment import CloudSREEnvironment
 except ImportError:
-    from cloud_sre_v2.models import CloudSREAction, CloudSREObservation
-    from cloud_sre_v2.server.cloud_sre_environment import CloudSREEnvironment
+    from models import CloudSREAction, CloudSREObservation
+    from server.cloud_sre_environment import CloudSREEnvironment
 
 from fastapi.responses import HTMLResponse
 

@@ -40,8 +40,8 @@ def main():
 
     # Each process creates its OWN database and queue connections
     # to the SHARED files on disk — exactly like real microservices
-    from cloud_sre_v2.infra.database import Database
-    from cloud_sre_v2.infra.queue import MessageQueue
+    from infra.database import Database
+    from infra.queue import MessageQueue
 
     db = Database(args.db_path)
     # Don't initialize schema — orchestrator already did that
@@ -51,52 +51,52 @@ def main():
 
     # Create the appropriate service — 16 real OS processes
     if args.service == "payment":
-        from cloud_sre_v2.services.payment_service import PaymentService
+        from services.payment_service import PaymentService
         svc = PaymentService(db, queue, port=args.port, log_dir=args.log_dir)
     elif args.service == "auth":
-        from cloud_sre_v2.services.auth_service import AuthService
+        from services.auth_service import AuthService
         svc = AuthService(db, port=args.port, log_dir=args.log_dir)
     elif args.service == "worker":
-        from cloud_sre_v2.services.worker_service import WorkerService
+        from services.worker_service import WorkerService
         svc = WorkerService(db, queue, port=args.port, log_dir=args.log_dir)
     elif args.service == "frontend":
-        from cloud_sre_v2.services.frontend_proxy import FrontendProxy
+        from services.frontend_proxy import FrontendProxy
         svc = FrontendProxy(port=args.port, log_dir=args.log_dir)
     elif args.service == "cache":
-        from cloud_sre_v2.services.cache_service import CacheService
+        from services.cache_service import CacheService
         svc = CacheService(port=args.port, log_dir=args.log_dir)
     elif args.service == "notification":
-        from cloud_sre_v2.services.notification_service import NotificationService
+        from services.notification_service import NotificationService
         svc = NotificationService(port=args.port, log_dir=args.log_dir)
     elif args.service == "search":
-        from cloud_sre_v2.services.search_service import SearchService
+        from services.search_service import SearchService
         svc = SearchService(port=args.port, log_dir=args.log_dir)
     elif args.service == "gateway":
-        from cloud_sre_v2.services.gateway_service import GatewayService
+        from services.gateway_service import GatewayService
         svc = GatewayService(port=args.port, log_dir=args.log_dir)
     elif args.service == "scheduler":
-        from cloud_sre_v2.services.scheduler_service import SchedulerService
+        from services.scheduler_service import SchedulerService
         svc = SchedulerService(port=args.port, log_dir=args.log_dir)
     elif args.service == "storage":
-        from cloud_sre_v2.services.storage_service import StorageService
+        from services.storage_service import StorageService
         svc = StorageService(port=args.port, log_dir=args.log_dir)
     elif args.service == "metrics_collector":
-        from cloud_sre_v2.services.metrics_collector_service import MetricsCollectorService
+        from services.metrics_collector_service import MetricsCollectorService
         svc = MetricsCollectorService(port=args.port, log_dir=args.log_dir)
     elif args.service == "email":
-        from cloud_sre_v2.services.email_service import EmailService
+        from services.email_service import EmailService
         svc = EmailService(port=args.port, log_dir=args.log_dir)
     elif args.service == "billing":
-        from cloud_sre_v2.services.billing_service import BillingService
+        from services.billing_service import BillingService
         svc = BillingService(port=args.port, log_dir=args.log_dir)
     elif args.service == "config":
-        from cloud_sre_v2.services.config_service import ConfigService
+        from services.config_service import ConfigService
         svc = ConfigService(port=args.port, log_dir=args.log_dir)
     elif args.service == "dns":
-        from cloud_sre_v2.services.dns_service import DNSService
+        from services.dns_service import DNSService
         svc = DNSService(port=args.port, log_dir=args.log_dir)
     elif args.service == "loadbalancer":
-        from cloud_sre_v2.services.loadbalancer_service import LoadBalancerService
+        from services.loadbalancer_service import LoadBalancerService
         svc = LoadBalancerService(port=args.port, log_dir=args.log_dir)
     else:
         print(f"Unknown service: {args.service}", file=sys.stderr)

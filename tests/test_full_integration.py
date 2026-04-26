@@ -21,7 +21,7 @@ def check(name, condition, detail=""):
 
 # 1. Orchestrator + 6 services
 print("1. Starting 6 services...")
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 orch = ServiceOrchestrator(
     db_path="D:/Meta/cloud_sre_v2/_test_data/test.db",
     log_dir="D:/Meta/cloud_sre_v2/_test_log",
@@ -54,7 +54,7 @@ check("queue status", "queue_depth" in out2)
 
 # 4. Environment import + RLVE features
 print("\n4. RLVE features...")
-from cloud_sre_v2.server.cloud_sre_environment import CloudSREEnvironment, PerformanceTracker
+from server.cloud_sre_environment import CloudSREEnvironment, PerformanceTracker
 
 env_cls = CloudSREEnvironment
 check("_clamp_reward exists", hasattr(env_cls, "_clamp_reward"))
@@ -78,11 +78,11 @@ check("should NOT promote cascade (no data)", not pt.should_promote("cascade"))
 
 # 5. Scenarios
 print("\n5. Scenarios...")
-from cloud_sre_v2.server.constants import TASK_CONFIGS
+from server.constants import TASK_CONFIGS
 check("5 task tiers", len(TASK_CONFIGS) == 5)
 
 # Count scenarios by inspecting the pools
-from cloud_sre_v2.server import constants
+from server import constants
 warmup = constants._warmup_scenarios.__code__.co_consts
 check("warmup has cache scenario", True)  # We added it
 

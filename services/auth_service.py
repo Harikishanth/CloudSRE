@@ -22,8 +22,8 @@ from typing import Optional
 from fastapi import Request, Header
 from fastapi.responses import JSONResponse
 
-from cloud_sre_v2.services.base_service import BaseService
-from cloud_sre_v2.infra.database import Database
+from services.base_service import BaseService
+from infra.database import Database
 
 
 class AuthService(BaseService):

@@ -10,7 +10,7 @@ os.makedirs("D:/Meta/cloud_sre_v2/_test_data/queue", exist_ok=True)
 os.makedirs("D:/Meta/cloud_sre_v2/_test_log", exist_ok=True)
 
 print("1. Testing orchestrator creation...")
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 orch = ServiceOrchestrator(
     db_path="D:/Meta/cloud_sre_v2/_test_data/test.db",
     log_dir="D:/Meta/cloud_sre_v2/_test_log",
@@ -83,7 +83,7 @@ assert all_healthy, f"Not all healthy after reset: {health4}"
 print("   ✅ Reset works — all services healthy again")
 
 print("\n6. Testing graders...")
-from cloud_sre_v2.server.graders import grade_episode
+from server.graders import grade_episode
 
 # Simple warmup test
 score, feedback, details = grade_episode(
@@ -118,7 +118,7 @@ score2, feedback2, details2 = grade_episode(
 print(f"   ✅ Cascade grader: score={score2}, feedback={feedback2[:60]}")
 
 print("\n7. Testing scenario spec...")
-from cloud_sre_v2.models import ScenarioSpec, CascadeRule
+from models import ScenarioSpec, CascadeRule
 s = ScenarioSpec(
     scenario_id="test",
     failure_type="db_lock",

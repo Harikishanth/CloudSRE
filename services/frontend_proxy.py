@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from cloud_sre_v2.services.base_service import BaseService
+from services.base_service import BaseService
 
 
 class FrontendProxy(BaseService):

@@ -7,7 +7,7 @@ sys.path.insert(0, "D:/Meta")
 os.makedirs("D:/Meta/cloud_sre_v2/_test_data", exist_ok=True)
 os.makedirs("D:/Meta/cloud_sre_v2/_test_log", exist_ok=True)
 
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 
 orch = ServiceOrchestrator(
     db_path="D:/Meta/cloud_sre_v2/_test_data/test.db",

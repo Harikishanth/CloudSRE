@@ -2,7 +2,7 @@
 import sys, os, tempfile, sqlite3
 sys.path.insert(0, "D:/Meta")
 
-from cloud_sre_v2.infra.database import Database
+from infra.database import Database
 
 # Use a temp file so we don't mess with any existing DB
 with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:

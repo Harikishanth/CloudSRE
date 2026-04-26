@@ -9,7 +9,7 @@ Fault types:
 """
 
 import time
-from cloud_sre_v2.services.base_service import BaseService
+from services.base_service import BaseService
 
 
 class MetricsCollectorService(BaseService):

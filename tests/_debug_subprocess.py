@@ -2,7 +2,7 @@
 import sys, time
 sys.path.insert(0, "D:/Meta")
 
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 
 o = ServiceOrchestrator(
     db_path="D:/Meta/cloud_sre_v2/_test_data/app.db",

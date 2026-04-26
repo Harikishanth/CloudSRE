@@ -15,7 +15,7 @@ Usage:
 """
 
 # Lazy imports — DO NOT eagerly import models or client here.
-# Service worker subprocesses import cloud_sre_v2.services.xxx which
+# Service worker subprocesses import services.xxx which
 # triggers this __init__.py. If we eagerly import client.py, it pulls
 # in openenv-core which may not be installed or may hang.
 

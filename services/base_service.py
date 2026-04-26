@@ -26,8 +26,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from cloud_sre_v2.infra.metrics import ServiceMetrics
-from cloud_sre_v2.infra.logger import StructuredLogger
+from infra.metrics import ServiceMetrics
+from infra.logger import StructuredLogger
 
 
 class BaseService:

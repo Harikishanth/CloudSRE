@@ -31,7 +31,7 @@ except ImportError:
     from models import CloudSREAction, CloudSREObservation, CloudSREState
 
 from .constants import TASK_CONFIGS
-from cloud_sre_v2.services.orchestrator import ServiceOrchestrator
+from services.orchestrator import ServiceOrchestrator
 
 # LLM Judge — optional, only used when HF_TOKEN is set
 try:

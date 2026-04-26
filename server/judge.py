@@ -11,7 +11,7 @@ Our design: Same structure + cascade-aware evaluation + Gemini support.
 import logging
 from typing import Optional, Tuple
 
-from cloud_sre_v2.server.llm_client import LLMClient
+from server.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 

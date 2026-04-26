@@ -48,9 +48,9 @@ import logging
 import tempfile
 from typing import Dict, Any, Optional, List
 
-from cloud_sre_v2.infra.database import Database
-from cloud_sre_v2.infra.queue import MessageQueue
-from cloud_sre_v2.server.command_executor import CommandExecutor
+from infra.database import Database
+from infra.queue import MessageQueue
+from server.command_executor import CommandExecutor
 
 logger = logging.getLogger(__name__)
 

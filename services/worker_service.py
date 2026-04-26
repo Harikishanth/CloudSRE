@@ -25,9 +25,9 @@ from typing import Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from cloud_sre_v2.services.base_service import BaseService
-from cloud_sre_v2.infra.database import Database
-from cloud_sre_v2.infra.queue import MessageQueue, QueueFull
+from services.base_service import BaseService
+from infra.database import Database
+from infra.queue import MessageQueue, QueueFull
 
 
 class WorkerService(BaseService):
