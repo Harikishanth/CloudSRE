@@ -318,8 +318,6 @@ docker run -p 7860:7860 cloudsre:latest
 | **Trained Model** | [DarDrax/cloudsre-1.5B-FINAL](https://huggingface.co/DarDrax/cloudsre-1.5B-FINAL) |
 | **Blog/Writeup** | [BLOG_POST.md](./BLOG_POST.md) |
 | **Training Notebook (Colab)** | [CloudSRE_Training_Colab.ipynb](./CloudSRE_Training_Colab.ipynb) |
-| **WandB — Leg 1** (Warmup + Single Fault) | [CloudSRE-Hackathon-Run](https://wandb.ai/-dardrax-/CloudSRE-Hackathon-Run) |
-| **WandB — Leg 2** (Cascade + Multi + Adversarial) | [CloudSRE-GRPO](https://wandb.ai/-dardrax-/CloudSRE-GRPO) |
 | **GitHub** | [Harikishanth/CloudSRE](https://github.com/Harikishanth/CloudSRE) |
 | **Judges Guide** | [JUDGES_START_HERE.md](./JUDGES_START_HERE.md) |
 | **Demo Video** | *(Link to be added)* |
