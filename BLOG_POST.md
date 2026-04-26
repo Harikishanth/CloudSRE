@@ -41,7 +41,7 @@ We pitted our tiny, 1.5B parameter Qwen agent against a 72B Goliath.
 
 ## 📈 Chapter 3: The Breakthrough (GRPO Training)
 
-Our training regimen was brutal. We used **Group Relative Policy Optimization (GRPO)** via the HF TRL library, utilizing a vLLM backend.
+Our training regimen was brutal. Instead of relying on standard RL wrappers, we built a **Custom GRPO (Group Relative Policy Optimization) implementation purely in Unsloth** utilizing its highly optimized raw gradients and fast LoRA backwards passes.
 
 For the first dozen episodes of Phase 2, our agent was slaughtered. The 72B Designer’s death spirals were too complex. The agent would fix the API Gateway, completely ignoring the fact that the actual root cause was a dead RabbitMQ queue backing up the Payment service. The resolution rate sat stubbornly at 0%.
 
